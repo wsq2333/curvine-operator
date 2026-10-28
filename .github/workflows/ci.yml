@@ -1,0 +1,16 @@
+name: check
+on: [push, pull_request]
+permissions:
+  contents: read
+jobs:
+  check:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-go@v5
+        with:
+          go-version-file: go.mod
+          cache: false
+      - run: make check build
+      - run: bin/curvine-operator validate --file examples/cluster-development.json
+      - run: bin/curvine-operator plan --file examples/cluster-production.json

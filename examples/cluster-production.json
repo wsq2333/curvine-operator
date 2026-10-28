@@ -1,0 +1,16 @@
+{
+  "apiVersion": "storage.curvine.io/v1alpha1",
+  "kind": "CurvineCluster",
+  "metadata": { "name": "cv-prod", "namespace": "curvine" },
+  "spec": {
+    "clusterID": "cv-prod",
+    "clusterDomain": "cluster.local",
+    "profile": "production",
+    "image": "registry.example.com/curvine@sha256:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+    "deletionPolicy": "Retain",
+    "master": { "replicas": 3, "storage": { "storageClassName": "example-ssd", "sizeGiB": 100 } },
+    "workerPools": [
+      { "name": "ssd", "replicas": 3, "storage": { "storageClassName": "example-local-ssd", "sizeGiB": 1000 } }
+    ]
+  }
+}
