@@ -32,6 +32,15 @@ func TestCLIContract(t *testing.T) {
 	}
 }
 
+func TestHelpSucceedsWithoutReadingFiles(t *testing.T) {
+	for _, args := range [][]string{nil, {"help"}, {"--help"}, {"-h"}, {"plan", "--help"}, {"validate", "-h"}} {
+		var out, stderr bytes.Buffer
+		if code := Run(args, &out, &stderr); code != 0 || stderr.Len() != 0 || !strings.Contains(out.String(), "Usage:") {
+			t.Fatalf("help %v: code=%d stdout=%s stderr=%s", args, code, &out, &stderr)
+		}
+	}
+}
+
 func TestCLIRejectsUnknownFieldsAndTrailingDocuments(t *testing.T) {
 	data, err := os.ReadFile("../../examples/cluster-development.json")
 	if err != nil {

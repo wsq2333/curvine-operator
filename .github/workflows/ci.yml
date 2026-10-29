@@ -12,5 +12,9 @@ jobs:
           go-version-file: go.mod
           cache: false
       - run: make check build
+      - run: make generate && git diff --exit-code -- api/v1alpha1/zz_generated.deepcopy.go config/crd/bases
+      - run: make test-envtest
+        env:
+          ENVTEST_DOWNLOAD: "1"
       - run: bin/curvine-operator validate --file examples/cluster-development.json
       - run: bin/curvine-operator plan --file examples/cluster-production.json

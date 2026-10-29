@@ -1,0 +1,29 @@
+apiVersion: rbac.authorization.k8s.io/v1
+kind: Role
+metadata:
+  name: curvine-operator
+rules:
+  - apiGroups: [""]
+    resources: [events]
+    verbs: [create, patch]
+  - apiGroups: [storage.curvine.io]
+    resources: [curvineclusters]
+    verbs: [get, list, watch]
+  - apiGroups: [storage.curvine.io]
+    resources: [curvineclusters/status]
+    verbs: [get, patch, update]
+  - apiGroups: [coordination.k8s.io]
+    resources: [leases]
+    verbs: [get, list, watch, create, update, patch]
+  - apiGroups: [""]
+    resources: [services, configmaps]
+    verbs: [get, list, watch, create, patch]
+  - apiGroups: [""]
+    resources: [pods, persistentvolumeclaims]
+    verbs: [get, list, watch]
+  - apiGroups: [apps]
+    resources: [statefulsets]
+    verbs: [get, list, watch, create, patch]
+  - apiGroups: [policy]
+    resources: [poddisruptionbudgets]
+    verbs: [get, list, watch, create, patch]

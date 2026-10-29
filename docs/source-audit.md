@@ -35,3 +35,12 @@
 7. **MDS/Transfer：** 客户端路由模式、FDB 引用、Transfer HA 后端和租约接管的实际验收状态。
 
 在这些契约稳定前，用适配层隔离版本差异，未知能力返回 `UnsupportedCapability` / `Unknown`，不通过猜测 HTTP 路径或解释日志文本来执行破坏性操作。
+
+## S2 补充核查（2026-10-29）
+
+资源运行契约固定为 `curvine-728d2a46`，而非跟随本地 HEAD。核查时本地源码 HEAD 已为 `174a4890`，通过 `git diff 728d2a46 HEAD` 确认本轮所依赖的 cluster_conf、pipeline、Master journal 初始化、容器 Dockerfile 和 Master 示例未变化，并读取 `728d2a46` 的 journal 初始化实现。
+
+- `pipeline.rs` 明确 `CURVINE_MASTER_HOSTNAME` 同时映射 Master/journal hostname，Worker 使用独立环境变量；无需设置 Linux FQDN hostname。
+- `journal_system.rs::require_existing_master_data` 在 format=false 时允许 metadata/journal 同为空或同为有效 RocksDB，拒绝不一致/非空非法目录；因此新卷初始化不需要启用 format。
+- 直接运行容器内 server 二进制，配置中的所有数据路径落在 PVC，日志路径落在可写 emptyDir；以 UID/GID 1000 运行是本 Operator 的显式镜像/存储兼容要求，未做真实镜像验证。
+- HTTP `/api/overview` 暴露 cluster_id、master_state、Worker 数量与容量，但这些字段本身不足以证明最新 quorum、软件版本和数据可用性。真实 Observer 仍未实现，不能用 TCP 或单一 Leader 状态冒充完整应用健康。

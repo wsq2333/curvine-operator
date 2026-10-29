@@ -1,6 +1,6 @@
 # Curvine Operator 能力设计
 
-状态：设计草案，2026-10-28。除 README 中标注的 S0 能力，其余均为待实现设计。
+状态：持续演进的设计。S0、S1 控制面/Observer 抽象及 S2 Kubernetes 资源执行层已有实现；真实 Observer 与部署/读写验收尚未完成；具体完成范围以 README、实施路线及验证记录为准。本文也描述尚未实现的后续能力。
 
 ## 1. 产品边界
 
@@ -24,7 +24,7 @@ flowchart LR
     M[Malta 验证结果] -. 升级验收证据 .-> R
 ```
 
-建议使用 Go + controller-runtime，统一 Kubernetes 类型、缓存、watch、工作队列与 leader election。S0 没有引入此依赖；接入时按其官方兼容关系选择成套的 `k8s.io/*` 版本，并明确实际支持的 Kubernetes 集群版本，不能把编译依赖版本当成 E2E 兼容矩阵。
+当前采用 Go + controller-runtime，统一 Kubernetes 类型、缓存、watch、工作队列与 leader election。依赖及已测试版本见 S1 文档；不能把编译依赖版本当成 E2E 兼容矩阵。
 
 每次 reconcile 只推进有限步骤；调用外部接口设超时，失败使用退避。不在一个 reconcile 中长时间等待备份、drain 或压测。以集群 UID、目标 generation、操作 UID 和步骤 ID 做去重，恢复时先观察已有结果再继续。不同集群可并发，同一集群的升级、缩容与恢复互斥。leader election 不替代幂等性。
 
@@ -39,7 +39,7 @@ flowchart LR
 | `CurvineBackup` / `CurvineRestore`（P1） | 备份目标、恢复源、校验与恢复目标 | 有保留策略及审计的独立任务 |
 | 数据集预热资源（P3，名称待定） | UFS 引用、路径、TTL、容量预算与优先级 | 先复用 Transfer/Fluid 能力，再决定是否单独建 CRD |
 
-不要一开始创建大量 CRD。S1 只注册 `CurvineCluster`；Operation 与备份 API 在有可用执行协议之后引入。S0 JSON 模型尚不是 Kubernetes runtime.Object，不支持服务端默认值、CEL、admission 或 status subresource。
+S1 只注册 `CurvineCluster`；Operation 与备份 API 在有可用执行协议之后引入。Kubernetes 类型已支持服务端默认值、CEL 和 status subresource；S0 CLI 保留独立的严格 JSON 意图模型。
 
 期望 status 至少包含 `observedGeneration`、实际版本分布、Master leader/成员/仲裁、Worker 注册数/容量/退役状态、配置哈希、端点、正在执行的操作与 Conditions。Conditions 建议分开使用 `SpecValid`、`ResourcesReady`、`QuorumHealthy`、`DataAvailable`、`Progressing`、`Degraded`；观察失败标 `Unknown` 并保留时间，不能把无数据当健康。
 

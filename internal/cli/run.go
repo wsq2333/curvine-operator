@@ -2,6 +2,7 @@ package cli
 
 import (
 	"encoding/json"
+	"errors"
 	"flag"
 	"fmt"
 	"io"
@@ -27,21 +28,19 @@ func readCluster(path string) (api.Cluster, error) {
 		return c, err
 	}
 	defer f.Close()
-	d := json.NewDecoder(f)
-	d.DisallowUnknownFields()
-	if err := d.Decode(&c); err != nil {
-		return c, err
+	c, err = api.Decode(f)
+	if err != nil {
+		return c, fmt.Errorf("%s: %w", path, err)
 	}
-	var trailing any
-	if err := d.Decode(&trailing); err != io.EOF {
-		return c, fmt.Errorf("expected exactly one JSON document")
-	}
-	return c, c.Validate()
+	return c, nil
 }
 
 func Run(args []string, out, stderr io.Writer) int {
 	fail := func(err error) int { fmt.Fprintln(stderr, err); return 2 }
-	if len(args) == 0 || args[0] == "help" || args[0] == "--help" {
+	if len(args) == 0 || args[0] == "help" || args[0] == "--help" || args[0] == "-h" {
+		if len(args) > 1 {
+			return fail(fmt.Errorf("help accepts no arguments"))
+		}
 		fmt.Fprint(out, usage)
 		return 0
 	}
@@ -57,12 +56,16 @@ func Run(args []string, out, stderr io.Writer) int {
 	}
 	flags := flag.NewFlagSet(args[0], flag.ContinueOnError)
 	flags.SetOutput(stderr)
+	flags.Usage = func() { fmt.Fprint(out, usage) }
 	file := flags.String("file", "", "desired cluster spec JSON")
 	var previousFile string
 	if args[0] == "plan" {
 		flags.StringVar(&previousFile, "previous", "", "previous intent JSON, not live state")
 	}
 	if err := flags.Parse(args[1:]); err != nil {
+		if errors.Is(err, flag.ErrHelp) {
+			return 0
+		}
 		return 2
 	}
 	if *file == "" || flags.NArg() != 0 {

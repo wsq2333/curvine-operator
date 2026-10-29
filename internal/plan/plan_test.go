@@ -30,6 +30,9 @@ func TestBootstrapHasQuorumDependencyAndIsNeverExecutable(t *testing.T) {
 	if p.Executable || len(p.Blockers) != 0 || len(p.RuntimeChecksRequired) == 0 {
 		t.Fatalf("invalid safety contract: %+v", p)
 	}
+	if p.Mode != "bootstrap" || p.PreviousSpecHash != "" || p.Cluster != fixture(t).Metadata || p.ClusterID != fixture(t).Spec.ClusterID {
+		t.Fatalf("missing bootstrap identity: %+v", p)
+	}
 	seen := map[string]bool{}
 	for _, step := range p.Steps {
 		for _, dep := range step.DependsOn {
@@ -38,6 +41,9 @@ func TestBootstrapHasQuorumDependencyAndIsNeverExecutable(t *testing.T) {
 			}
 		}
 		seen[step.ID] = true
+		if step.Replicas != nil && (step.Replicas.From != 0 || step.Replicas.To != 3) {
+			t.Fatalf("incorrect bootstrap replicas: %+v", step.Replicas)
+		}
 		if step.Operation == "create-persistent-worker-pool" && !reflect.DeepEqual(step.DependsOn, []string{"quorum"}) {
 			t.Fatal("workers must depend on observed quorum")
 		}
@@ -93,10 +99,32 @@ func TestScaleOutAndNoop(t *testing.T) {
 	if err != nil || len(p.Steps) != 0 || len(p.Blockers) != 0 {
 		t.Fatalf("no-op: %+v %v", p, err)
 	}
+	if p.Mode != "update" || p.PreviousSpecHash != p.DesiredSpecHash {
+		t.Fatalf("invalid no-op identity: %+v", p)
+	}
 	next.Spec.WorkerPools[0].Replicas++
 	p, err = Build(next, &old)
 	if err != nil || len(p.Steps) != 1 || p.Steps[0].Operation != "scale-out-worker-pool" || p.Executable {
 		t.Fatalf("scale out: %+v %v", p, err)
+	}
+	if p.PreviousSpecHash == p.DesiredSpecHash || p.Steps[0].Replicas == nil || *p.Steps[0].Replicas != (ReplicaChange{From: 3, To: 4}) {
+		t.Fatalf("missing replica diff: %+v", p)
+	}
+}
+
+func TestNewPoolAndInvalidPrevious(t *testing.T) {
+	old, next := fixture(t), fixture(t)
+	next.Spec.WorkerPools = append(next.Spec.WorkerPools, api.WorkerPool{Name: "new", Replicas: 2, Storage: old.Spec.WorkerPools[0].Storage})
+	p, err := Build(next, &old)
+	if err != nil || len(p.Steps) != 1 {
+		t.Fatalf("new pool: %+v %v", p, err)
+	}
+	if p.Steps[0].Target != "new" || p.Steps[0].Replicas == nil || *p.Steps[0].Replicas != (ReplicaChange{From: 0, To: 2}) {
+		t.Fatalf("incorrect new pool plan: %+v", p)
+	}
+	old.Spec.Master.Replicas = 2
+	if _, err := Build(next, &old); err == nil {
+		t.Fatal("accepted invalid previous intent")
 	}
 }
 

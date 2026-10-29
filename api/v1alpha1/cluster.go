@@ -1,10 +1,9 @@
-// Package v1alpha1 defines the offline cluster-spec prototype.
-// It is not yet a registered Kubernetes runtime.Object or an installed CRD.
 package v1alpha1
 
 import (
 	"fmt"
 	"regexp"
+	"strconv"
 	"strings"
 )
 
@@ -22,28 +21,62 @@ type Metadata struct {
 	Namespace string `json:"namespace"`
 }
 
+// +kubebuilder:validation:XValidation:rule="self.profile != 'production' || self.master.replicas >= 3",message="production requires 3 or 5 masters"
 type Spec struct {
-	ClusterID      string       `json:"clusterID"`
-	ClusterDomain  string       `json:"clusterDomain"`
-	Profile        string       `json:"profile"`
-	Image          string       `json:"image"`
-	DeletionPolicy string       `json:"deletionPolicy"`
-	Master         MasterSpec   `json:"master"`
-	WorkerPools    []WorkerPool `json:"workerPools"`
+	// +kubebuilder:validation:MaxLength=63
+	// +kubebuilder:validation:Pattern="^[a-z]([-a-z0-9]*[a-z0-9])?$"
+	// +kubebuilder:validation:XValidation:rule="self == oldSelf",message="clusterID is immutable"
+	ClusterID string `json:"clusterID"`
+	// +optional
+	// +kubebuilder:default="cluster.local"
+	// +kubebuilder:validation:MaxLength=253
+	// +kubebuilder:validation:Pattern="^[a-z0-9]([-a-z0-9]{0,61}[a-z0-9])?([.][a-z0-9]([-a-z0-9]{0,61}[a-z0-9])?)*$"
+	// +kubebuilder:validation:XValidation:rule="self == oldSelf",message="clusterDomain is immutable"
+	ClusterDomain string `json:"clusterDomain"`
+	// +optional
+	// +kubebuilder:default="development"
+	// +kubebuilder:validation:MaxLength=11
+	// +kubebuilder:validation:Enum=development;production
+	// +kubebuilder:validation:XValidation:rule="self == oldSelf",message="profile migration is not supported"
+	Profile string `json:"profile"`
+	// +kubebuilder:validation:MaxLength=327
+	// +kubebuilder:validation:Pattern="^[a-z0-9][a-z0-9./:_-]*@sha256:[a-f0-9]{64}$"
+	// +kubebuilder:validation:XValidation:rule="self == oldSelf",message="image upgrades require a dedicated workflow"
+	Image string `json:"image"`
+	// +optional
+	// +kubebuilder:default="Retain"
+	// +kubebuilder:validation:Enum=Retain
+	DeletionPolicy string `json:"deletionPolicy"`
+	// +kubebuilder:validation:XValidation:rule="self == oldSelf",message="master membership and storage changes are not supported"
+	Master MasterSpec `json:"master"`
+	// +listType=map
+	// +listMapKey=name
+	// +kubebuilder:validation:MinItems=1
+	// +kubebuilder:validation:MaxItems=64
+	// +kubebuilder:validation:XValidation:rule="oldSelf.all(p, self.exists(n, n.name == p.name && n.replicas >= p.replicas && n.storage == p.storage))",message="worker removal, scale-in and storage changes require a dedicated workflow"
+	WorkerPools []WorkerPool `json:"workerPools"`
 }
 
 type MasterSpec struct {
+	// +kubebuilder:validation:Enum=1;3;5
 	Replicas int     `json:"replicas"`
 	Storage  Storage `json:"storage"`
 }
 
 type Storage struct {
+	// +kubebuilder:validation:MaxLength=253
+	// +kubebuilder:validation:Pattern="^[a-z0-9]([-a-z0-9]{0,61}[a-z0-9])?([.][a-z0-9]([-a-z0-9]{0,61}[a-z0-9])?)*$"
 	StorageClassName string `json:"storageClassName"`
-	SizeGiB          int    `json:"sizeGiB"`
+	// +kubebuilder:validation:Minimum=1
+	SizeGiB int `json:"sizeGiB"`
 }
 
 type WorkerPool struct {
-	Name     string  `json:"name"`
+	// +kubebuilder:validation:MaxLength=16
+	// +kubebuilder:validation:Pattern="^[a-z]([-a-z0-9]*[a-z0-9])?$"
+	Name string `json:"name"`
+	// +kubebuilder:validation:Minimum=1
+	// +kubebuilder:validation:Maximum=10000
 	Replicas int     `json:"replicas"`
 	Storage  Storage `json:"storage"`
 }
@@ -51,7 +84,44 @@ type WorkerPool struct {
 var dnsLabel = regexp.MustCompile(`^[a-z]([-a-z0-9]*[a-z0-9])?$`)
 var dnsPart = regexp.MustCompile(`^[a-z0-9]([-a-z0-9]*[a-z0-9])?$`)
 var digest = regexp.MustCompile(`^[a-f0-9]{64}$`)
-var repository = regexp.MustCompile(`^[a-z0-9][a-z0-9./:_-]*$`)
+var repositoryPart = regexp.MustCompile(`^[a-z0-9]+(?:(?:[._]|__|-+)[a-z0-9]+)*$`)
+
+// S0 supports lowercase repository names with an optional DNS registry and
+// port, followed by a SHA-256 digest. Tags and IPv6 registry literals are not
+// part of this deliberately narrow input contract.
+func validRepository(s string) bool {
+	if len(s) == 0 || len(s) > 255 {
+		return false
+	}
+	parts := strings.Split(s, "/")
+	if len(parts) > 1 && (strings.ContainsAny(parts[0], ".:") || parts[0] == "localhost") {
+		host, port, hasPort := strings.Cut(parts[0], ":")
+		if !validDomain(host) {
+			return false
+		}
+		if hasPort {
+			if len(port) == 0 || len(port) > 5 {
+				return false
+			}
+			for _, ch := range port {
+				if ch < '0' || ch > '9' {
+					return false
+				}
+			}
+			n, err := strconv.Atoi(port)
+			if err != nil || n < 1 || n > 65535 {
+				return false
+			}
+		}
+		parts = parts[1:]
+	}
+	for _, part := range parts {
+		if !repositoryPart.MatchString(part) {
+			return false
+		}
+	}
+	return true
+}
 
 func validLabel(s string, max int) bool { return len(s) <= max && dnsLabel.MatchString(s) }
 
@@ -98,8 +168,8 @@ func (c Cluster) Validate() error {
 		return fmt.Errorf("production requires 3 or 5 masters")
 	}
 	repo, hash, ok := strings.Cut(c.Spec.Image, "@sha256:")
-	if !ok || !repository.MatchString(repo) || !digest.MatchString(hash) {
-		return fmt.Errorf("image must use a repository@sha256:<64 lowercase hex characters> reference")
+	if !ok || !validRepository(repo) || !digest.MatchString(hash) {
+		return fmt.Errorf("image must use a lowercase repository (optional DNS registry and port, no tag) followed by @sha256:<64 lowercase hex characters>")
 	}
 	if c.Spec.DeletionPolicy != "Retain" {
 		return fmt.Errorf("only deletionPolicy=Retain is supported")
@@ -107,8 +177,8 @@ func (c Cluster) Validate() error {
 	if err := validateStorage(c.Spec.Master.Storage); err != nil {
 		return fmt.Errorf("master: %w", err)
 	}
-	if len(c.Spec.WorkerPools) == 0 {
-		return fmt.Errorf("at least one worker pool is required")
+	if len(c.Spec.WorkerPools) == 0 || len(c.Spec.WorkerPools) > 64 {
+		return fmt.Errorf("between 1 and 64 worker pools are required")
 	}
 	seen := map[string]bool{}
 	for _, pool := range c.Spec.WorkerPools {

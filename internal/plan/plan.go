@@ -18,20 +18,31 @@ type Blocker struct {
 }
 
 type Step struct {
-	ID        string   `json:"id"`
-	Operation string   `json:"operation"`
-	Target    string   `json:"target"`
-	DependsOn []string `json:"dependsOn,omitempty"`
+	ID        string         `json:"id"`
+	Operation string         `json:"operation"`
+	Target    string         `json:"target"`
+	DependsOn []string       `json:"dependsOn,omitempty"`
+	Replicas  *ReplicaChange `json:"replicas,omitempty"`
+}
+
+// ReplicaChange compares requested counts, not observed live replicas.
+type ReplicaChange struct {
+	From int `json:"from"`
+	To   int `json:"to"`
 }
 
 type Plan struct {
-	APIVersion            string    `json:"apiVersion"`
-	Stage                 string    `json:"stage"`
-	Executable            bool      `json:"executable"`
-	DesiredSpecHash       string    `json:"desiredSpecHash"`
-	Blockers              []Blocker `json:"blockers"`
-	Steps                 []Step    `json:"steps"`
-	RuntimeChecksRequired []string  `json:"runtimeChecksRequired"`
+	APIVersion            string       `json:"apiVersion"`
+	Stage                 string       `json:"stage"`
+	Executable            bool         `json:"executable"`
+	Mode                  string       `json:"mode"`
+	Cluster               api.Metadata `json:"cluster"`
+	ClusterID             string       `json:"clusterID"`
+	PreviousSpecHash      string       `json:"previousSpecHash,omitempty"`
+	DesiredSpecHash       string       `json:"desiredSpecHash"`
+	Blockers              []Blocker    `json:"blockers"`
+	Steps                 []Step       `json:"steps"`
+	RuntimeChecksRequired []string     `json:"runtimeChecksRequired"`
 }
 
 func (p *Plan) block(reason, message string) {
@@ -42,6 +53,18 @@ func pools(c api.Cluster) []api.WorkerPool {
 	out := append([]api.WorkerPool(nil), c.Spec.WorkerPools...)
 	sort.Slice(out, func(i, j int) bool { return out[i].Name < out[j].Name })
 	return out
+}
+
+// specHash includes identity and all intent fields; worker-pool order is not
+// significant. It never modifies a caller-owned slice.
+func specHash(c api.Cluster) (string, error) {
+	c.Spec.WorkerPools = pools(c)
+	data, err := json.Marshal(c)
+	if err != nil {
+		return "", err
+	}
+	hash := sha256.Sum256(data)
+	return hex.EncodeToString(hash[:]), nil
 }
 
 // Build compares desired intent with optional previous intent. A previous spec
@@ -56,16 +79,14 @@ func Build(desired api.Cluster, previous *api.Cluster) (Plan, error) {
 			return Plan{}, fmt.Errorf("previous: %w", err)
 		}
 	}
-	canonical := desired
-	canonical.Spec.WorkerPools = pools(desired)
-	data, err := json.Marshal(canonical)
+	hash, err := specHash(desired)
 	if err != nil {
 		return Plan{}, err
 	}
-	hash := sha256.Sum256(data)
 	p := Plan{
 		APIVersion: "plan.curvine.io/v1alpha1", Stage: "S0-offline", Executable: false,
-		DesiredSpecHash: hex.EncodeToString(hash[:]), Blockers: []Blocker{}, Steps: []Step{},
+		Mode: "bootstrap", Cluster: desired.Metadata, ClusterID: desired.Spec.ClusterID,
+		DesiredSpecHash: hash, Blockers: []Blocker{}, Steps: []Step{},
 		RuntimeChecksRequired: []string{
 			"Read current resource UIDs, generations, ownership and pending operations; recompute the plan before any write",
 			"Verify image availability and Curvine version/feature compatibility",
@@ -77,13 +98,18 @@ func Build(desired api.Cluster, previous *api.Cluster) (Plan, error) {
 		p.Steps = append(p.Steps,
 			Step{ID: "identity", Operation: "reserve-cluster-identity-and-check-retained-volumes", Target: desired.Spec.ClusterID},
 			Step{ID: "config", Operation: "render-versioned-config-and-headless-services", Target: desired.Metadata.Name, DependsOn: []string{"identity"}},
-			Step{ID: "masters", Operation: "bootstrap-persistent-master-statefulset", Target: desired.Metadata.Name + "-master", DependsOn: []string{"config"}},
+			Step{ID: "masters", Operation: "bootstrap-persistent-master-statefulset", Target: desired.Metadata.Name + "-master", DependsOn: []string{"config"}, Replicas: &ReplicaChange{To: desired.Spec.Master.Replicas}},
 			Step{ID: "quorum", Operation: "wait-for-application-raft-quorum", Target: desired.Metadata.Name + "-master", DependsOn: []string{"masters"}},
 		)
 		for _, pool := range pools(desired) {
-			p.Steps = append(p.Steps, Step{ID: "workers-" + pool.Name, Operation: "create-persistent-worker-pool", Target: pool.Name, DependsOn: []string{"quorum"}})
+			p.Steps = append(p.Steps, Step{ID: "workers-" + pool.Name, Operation: "create-persistent-worker-pool", Target: pool.Name, DependsOn: []string{"quorum"}, Replicas: &ReplicaChange{To: pool.Replicas}})
 		}
 		return p, nil
+	}
+	p.Mode = "update"
+	p.PreviousSpecHash, err = specHash(*previous)
+	if err != nil {
+		return Plan{}, err
 	}
 	old := previous.Spec
 	next := desired.Spec
@@ -126,9 +152,9 @@ func Build(desired api.Cluster, previous *api.Cluster) (Plan, error) {
 	for _, pool := range pools(desired) {
 		before, exists := oldPools[pool.Name]
 		if !exists {
-			p.Steps = append(p.Steps, Step{ID: "workers-" + pool.Name, Operation: "create-persistent-worker-pool", Target: pool.Name})
+			p.Steps = append(p.Steps, Step{ID: "workers-" + pool.Name, Operation: "create-persistent-worker-pool", Target: pool.Name, Replicas: &ReplicaChange{To: pool.Replicas}})
 		} else if pool.Replicas > before.Replicas {
-			p.Steps = append(p.Steps, Step{ID: "workers-" + pool.Name, Operation: "scale-out-worker-pool", Target: pool.Name})
+			p.Steps = append(p.Steps, Step{ID: "workers-" + pool.Name, Operation: "scale-out-worker-pool", Target: pool.Name, Replicas: &ReplicaChange{From: before.Replicas, To: pool.Replicas}})
 		}
 	}
 	return p, nil

@@ -1,10 +1,10 @@
 # 实施路线与验收门槛
 
-按依赖和验收结果推进，不以未验证的时间估算承诺上线。S0 已实现；S1 及之后均未实现。
+按依赖和验收结果推进，不以未验证的时间估算承诺上线。S0 已完成本地验收。S1 的 Kubernetes 控制面和 Observer 抽象已实现，具体 Curvine 版本适配及应用契约测试待完成；S2 的资源构建、受控执行与监听已通过本地验证，真实部署/读写/恢复验收待完成；S3 及之后尚未完成。参见 [S0 契约](s0.md)、[S1 控制面](s1-control-plane.md) 与 [S2 工作负载](s2-workloads.md)。
 
 | 阶段 | 交付内容 | 验收门槛 | 依赖 |
 | --- | --- | --- | --- |
-| S0 项目基础 | Go 模型、离线校验/计划、保护规则、源码核查和设计 | make check build、CLI 退出码与阻断案例 | 本地 Go |
+| S0 项目基础 | Go 模型、严格 JSON 校验、可追溯离线计划、保护规则、源码核查和设计 | make check build、真实 CLI 退出码 0/2/3、缩容与混合变更阻断 | 本地 Go |
 | S1 应用契约与 K8s 控制面 | 上游适配接口、Kubernetes API types/CRD/status、manager、RBAC、leader election、只读 Observer | envtest 校验默认值/不可变字段/status 冲突；真实应用接口契约测试 | 明确 Curvine 镜像版本、K8s 支持范围 |
 | S2 创建与持续收敛 | Master/Worker StatefulSet、PVC、配置与 Service、应用健康、数据保留、漂移修复 | kind/测试集群真实部署与文件读写；重复 reconcile、Operator/Pod 重启、资源同名冲突、CR 删除后数据可恢复 | S1、可用镜像与 StorageClass |
 | S3 日常运维 | Worker 扩容、诊断、指标、配置分类与修订、暂停/恢复策略 | 扩容后 Worker 真注册且可承载 I/O；配置失败不破坏健康集群；权限不足显示原因 | S2 |
@@ -14,12 +14,25 @@
 
 S5 中各服务可以在 S2 后独立开发，但不能绕过对应的数据安全测试。Master 动态成员变更单独立项，待 Raft 外部协议与故障恢复测试成熟后启用；固定副本的生命周期不必等待此功能。
 
-## 最近一轮可直接实施的工作包
+## S0 验收清单
 
-1. **定义 CurvineAdmin 接口。** `ObserveCluster`、`ObserveWorker`、`BeginDrain`、`ObserveDrain` 等是拟议接口名；实现前映射到真实协议，明确时效、幂等、身份与错误分类。只读观察先落地。
-2. **把 API 草案升级成真实 CRD。** 增加 Kubernetes metadata/status、DeepCopy、schema、打印列与文档；核心静态限制进入 CEL/admission。确定 group/domain 的归属与发布路径，不能沿用草案就视为正式承诺。
-3. **实现纯资源构建器。** 用 typed Kubernetes objects 生成 Master/Worker、PVC、Services、ConfigMap 与 PDB；核验 Pod FQDN、Raft IDs、存储挂载和探针。对生成结果做结构性测试，不只做快照文本比较。
-4. **实现最小 reconcile。** 读取实际对象、拒绝错误所有权、有限步推进、status 条件、冲突重试与 Events；先保持固定 Master 规模，拒绝高风险字段变更。
+- [x] 独立 Go 模块、CLI、构建命令与 CI 检查入口。
+- [x] 规格模型、开发/生产示例、扩容/缩容示例。
+- [x] JSON 字段、类型、重复键、null、UTF-8、大小上限与镜像引用校验。
+- [x] 确定性的创建/差异计划、集群身份、新旧规格哈希与副本数变化。
+- [x] Master 成员变更、Worker 缩容/移除、升级、存储和身份迁移保护。
+- [x] 纯函数规划不修改输入；混合变更整体阻断；计划始终不可执行。
+- [x] 单元测试、真实二进制验收、race、vet、格式检查与构建通过。
+- [x] 设计、源码依据、CLI 契约与本地验证记录齐备。
+
+远端 CI 与集群测试不在已完成声明内。上述勾选只对应 [本地验证记录](validation.md)。
+
+## S1 与后续工作包
+
+1. **观察接口：抽象已完成，适配待完成。** 已有只读 `Observer.Observe`、Target/Snapshot、Unknown/Unsupported 和样本有效性契约。下一步固定真实 Curvine 版本并实现适配与契约测试；drain 等写操作不加入当前只读接口。
+2. **API 与控制面：已实现。** Kubernetes metadata/status、DeepCopy、schema、打印列、CEL、namespaced manager、RBAC、leader election 与 status reconcile 已落地。group 仍为早期 `storage.curvine.io/v1alpha1` 契约，尚未做跨版本 API 迁移。
+3. **纯资源构建器：已实现并本地验证。** 用 typed Kubernetes objects 生成 Master/Worker、PVC、Services、ConfigMap 与 PDB；核验 Pod FQDN、Raft IDs、存储挂载和探针。对生成结果做结构性测试，不只做快照文本比较。
+4. **工作负载 reconcile：已实现并本地验证。** 显式运行契约启用资源管理；全量冲突检查、dry-run、每轮至多一次写入、SSA 漂移修复、UID/RV 保护、子资源监听和 PVC Retain 已落地。Worker 创建/扩容受应用健康门控；默认 Observer 未适配时停在等待 quorum。
 5. **用一套实际镜像打通 E2E。** 验证创建 → 写文件 → 重启 Pod/控制器 → 读回 → 删除 CR → 保留卷。记录镜像 digest、Kubernetes 版本和 StorageClass，完成后再称为可部署 MVP。
 
 ## 验证分层
