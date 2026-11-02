@@ -10,8 +10,10 @@ import (
 	"time"
 
 	api "github.com/wsq2333/curvine-operator/api/v1alpha1"
+	"github.com/wsq2333/curvine-operator/internal/curvine/v054"
 	"github.com/wsq2333/curvine-operator/internal/observe"
 	appsv1 "k8s.io/api/apps/v1"
+	batchv1 "k8s.io/api/batch/v1"
 	corev1 "k8s.io/api/core/v1"
 	apierrors "k8s.io/apimachinery/pkg/api/errors"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
@@ -103,6 +105,9 @@ func (e *Engine) Reconcile(ctx context.Context, c *api.CurvineCluster, sample *o
 			}
 			continue
 		}
+		if _, ok := desired.(*batchv1.Job); ok {
+			continue
+		}
 		applied, err := e.apply(ctx, desired, live, true)
 		if err != nil {
 			return apiFailure(err)
@@ -122,11 +127,37 @@ func (e *Engine) Reconcile(ctx context.Context, c *api.CurvineCluster, sample *o
 			continue
 		}
 		if sts, ok := desired.(*appsv1.StatefulSet); ok && sts.Labels[RoleLabel] == "worker" {
-			if !setReady(existing[key(b.Master)], *b.Master.Spec.Replicas) || !e.fresh(c, sample) || sample.Quorum != observe.Healthy {
+			if c.Spec.ReadCache == nil && e.fresh(c, sample) && sample.Application != nil {
+				for _, cap := range sample.Application.Capabilities {
+					if cap.Name == "Quorum" && !cap.Supported {
+						return blocked("QuorumObservationUnsupported", "The selected application contract cannot prove quorum; Worker mutations remain blocked"), nil
+					}
+				}
+			}
+			// Cache bootstrap/scale-out allocates resources without deleting data.
+			// It does not assert quorum or the health of not-yet-created workers.
+			if c.Spec.ReadCache != nil {
+				if !setReady(existing[key(b.Master)], *b.Master.Spec.Replicas) {
+					return pending("WaitingForMasters", "Read-cache Worker allocation waits for Master workload startup"), nil
+				}
+			} else if !setReady(existing[key(b.Master)], *b.Master.Spec.Replicas) || !e.fresh(c, sample) || sample.Quorum != observe.Healthy {
 				return pending("WaitingForQuorum", "Worker creation or changes require ready masters and an observed healthy quorum"), nil
 			}
-			if ch.current != nil && *sts.Spec.Replicas > *ch.current.(*appsv1.StatefulSet).Spec.Replicas && (sample.Workers != observe.Healthy || sample.DataAvailability != observe.Healthy) {
+			if c.Spec.ReadCache == nil && ch.current != nil && *sts.Spec.Replicas > *ch.current.(*appsv1.StatefulSet).Spec.Replicas && (sample.Workers != observe.Healthy || sample.DataAvailability != observe.Healthy) {
 				return pending("WaitingForApplicationHealth", "Worker expansion requires observed worker health and data availability"), nil
+			}
+		}
+		if b.MountJob != nil && desired.GetName() == b.MountJob.Name {
+			if !setReady(existing[key(b.Master)], *b.Master.Spec.Replicas) {
+				return pending("WaitingForMasters", "Mount registration waits for Master startup"), nil
+			}
+		}
+		if b.FUSE != nil && desired.GetName() == b.FUSE.Name {
+			if jobFailed(existing[key(b.MountJob)]) {
+				return blocked("OriginMountFailed", "Mount registration failed; inspect the fixed helper failure and source credentials"), nil
+			}
+			if !jobComplete(existing[key(b.MountJob)]) {
+				return pending("WaitingForOriginMount", "FUSE starts after verified read-only origin registration"), nil
 			}
 		}
 		if err := e.current(ctx, c); err != nil {
@@ -167,11 +198,28 @@ func (e *Engine) Reconcile(ctx context.Context, c *api.CurvineCluster, sample *o
 		}
 	}
 
+	if b.MountJob != nil {
+		if jobFailed(existing[key(b.MountJob)]) {
+			return blocked("OriginMountFailed", "Read-only origin registration failed"), nil
+		}
+		if !jobComplete(existing[key(b.MountJob)]) {
+			return pending("WaitingForOriginMount", "Waiting for verified read-only origin registration"), nil
+		}
+	}
+	if b.FUSE != nil && !fuseReady(existing[key(b.FUSE)]) {
+		return pending("WaitingForFuseNodes", "Waiting for opted-in Linux nodes and current FUSE readiness probes"), nil
+	}
 	return Result{Status: metav1.ConditionTrue, Reason: "ResourcesConverged", Message: "Managed resources, StatefulSet revisions and bound claims match the desired specification"}, nil
 }
 
 func (e *Engine) fresh(c *api.CurvineCluster, sample *observe.Snapshot) bool {
 	if sample == nil {
+		return false
+	}
+	if sample.Application != nil && sample.Application.Contract != e.Contract {
+		return false
+	}
+	if e.Contract == v054.Contract && (sample.Application == nil || sample.Application.SourceCommit != v054.SourceCommit) {
 		return false
 	}
 	now := time.Now
@@ -199,10 +247,20 @@ func checkExisting(c *api.CurvineCluster, desired, live client.Object) *Result {
 		r := pending("ResourceTerminating", "A managed resource is terminating")
 		return &r
 	}
-	if live.GetAnnotations()[ContractAnnotation] != Contract {
+	if live.GetAnnotations()[ContractAnnotation] != desired.GetAnnotations()[ContractAnnotation] {
 		return fail("RuntimeContractConflict", "An existing resource uses a different or missing runtime contract")
 	}
 	switch want := desired.(type) {
+	case *batchv1.Job:
+		if !jobMatches(want, live.(*batchv1.Job)) {
+			return fail("MountJobConflict", "Mount job differs from the immutable read-cache contract")
+		}
+	case *appsv1.DaemonSet:
+		got := live.(*appsv1.DaemonSet)
+		if !reflect.DeepEqual(want.Spec.Selector, got.Spec.Selector) || len(got.Spec.Template.Spec.Containers) != 1 || got.Spec.Template.Spec.Containers[0].Image != want.Spec.Template.Spec.Containers[0].Image {
+			return fail("FuseLayoutConflict", "FUSE identity or image differs from the selected contract")
+		}
+
 	case *corev1.ConfigMap:
 		got := live.(*corev1.ConfigMap)
 		if !reflect.DeepEqual(want.Data, got.Data) || len(got.BinaryData) > 0 {

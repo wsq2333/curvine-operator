@@ -228,3 +228,32 @@ func TestInvalidSpecDoesNotCallObserverAndPreservesOtherConditions(t *testing.T)
 		t.Fatalf("incorrect conditions: %+v", c.Status)
 	}
 }
+
+func TestPartialCapabilitiesPublishWithoutInventingVersion(t *testing.T) {
+	r, cl, req := setup(t)
+	evidence := &api.ApplicationObservation{Contract: "curvine-v0.5.4-alpha", SourceCommit: strings.Repeat("a", 40), Reason: "WorkerRegistrationVerified", Masters: []api.MasterObservation{{Name: "test-master-0", Reachable: true, Role: "Active"}}, Capabilities: []api.CapabilityStatus{{Name: "Quorum", Supported: false, Reason: "NoQuorumProofEndpoint"}, {Name: "DataAvailability", Supported: false, Reason: "NoDataReadProofEndpoint"}, {Name: "MasterVersion", Supported: false, Reason: "NotExposedByHTTP"}}}
+	r.Observer = observerFunc(func(_ context.Context, target observe.Target) (observe.Snapshot, error) {
+		return observe.Snapshot{ClusterUID: target.UID, Generation: target.Generation, ObservedAt: r.Now(), Quorum: observe.Unknown, Workers: observe.Healthy, DataAvailability: observe.Unknown, Application: evidence}, nil
+	})
+	reconcile(t, r, req)
+	got := current(t, cl, req)
+	if got.Status.Observation == nil || got.Status.Observation.Application == nil || got.Status.Observation.Version != "" {
+		t.Fatal("partial application evidence lost")
+	}
+	for typ, reason := range map[string]string{QuorumHealthy: "NoQuorumProofEndpoint", DataAvailable: "NoDataReadProofEndpoint", Ready: "HealthUnknown"} {
+		cond := meta.FindStatusCondition(got.Status.Conditions, typ)
+		if cond == nil || cond.Status != metav1.ConditionUnknown || cond.Reason != reason {
+			t.Fatalf("wrong condition: %+v", cond)
+		}
+	}
+	copy := got.DeepCopy()
+	copy.Status.Observation.Application.Masters[0].Role = "Exit"
+	if got.Status.Observation.Application.Masters[0].Role != "Active" {
+		t.Fatal("application status shares slices")
+	}
+	r.Observer = observe.Unsupported{}
+	reconcile(t, r, req)
+	if current(t, cl, req).Status.Observation != nil {
+		t.Fatal("failed observer retained old partial evidence")
+	}
+}

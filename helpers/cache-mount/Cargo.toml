@@ -1,0 +1,15 @@
+[package]
+name = "curvine-cache-mount"
+version = "0.1.0"
+edition = "2021"
+
+# This crate is copied into the audited upstream workspace by the build script.
+[dependencies]
+curvine-config = { workspace = true }
+curvine-model = { workspace = true }
+curvine-fs-api = { workspace = true }
+curvine-runtime = { workspace = true }
+curvine-unified-fs = { workspace = true, features = ["opendal-s3", "opendal-oss"] }
+serde_json = { workspace = true }
+tokio = { workspace = true }
+sha2 = "=0.10.9"

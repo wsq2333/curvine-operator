@@ -22,7 +22,11 @@ type Metadata struct {
 }
 
 // +kubebuilder:validation:XValidation:rule="self.profile != 'production' || self.master.replicas >= 3",message="production requires 3 or 5 masters"
+// +kubebuilder:validation:XValidation:rule="has(self.readCache) == has(oldSelf.readCache)",message="deployment purpose is immutable"
+// +kubebuilder:validation:XValidation:rule="!has(self.readCache) || self.readCache == oldSelf.readCache",message="read cache configuration changes require a dedicated workflow"
 type Spec struct {
+	// +optional
+	ReadCache *ReadCacheSpec `json:"readCache,omitempty"`
 	// +kubebuilder:validation:MaxLength=63
 	// +kubebuilder:validation:Pattern="^[a-z]([-a-z0-9]*[a-z0-9])?$"
 	// +kubebuilder:validation:XValidation:rule="self == oldSelf",message="clusterID is immutable"
@@ -148,6 +152,11 @@ func validateStorage(s Storage) error {
 // An explicit storage class and image digest make intent reproducible; their
 // existence and runtime suitability still need online preflight checks.
 func (c Cluster) Validate() error {
+	if c.Spec.ReadCache != nil {
+		if err := c.Spec.ReadCache.Validate(); err != nil {
+			return err
+		}
+	}
 	if c.APIVersion != APIVersion || c.Kind != "CurvineCluster" {
 		return fmt.Errorf("expected %s CurvineCluster", APIVersion)
 	}

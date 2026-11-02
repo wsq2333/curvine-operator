@@ -15,6 +15,7 @@ import (
 	"github.com/wsq2333/curvine-operator/internal/controller"
 	"github.com/wsq2333/curvine-operator/internal/observe"
 	appsv1 "k8s.io/api/apps/v1"
+	batchv1 "k8s.io/api/batch/v1"
 	coordinationv1 "k8s.io/api/coordination/v1"
 	corev1 "k8s.io/api/core/v1"
 	policyv1 "k8s.io/api/policy/v1"
@@ -85,7 +86,7 @@ func TestControlPlane(t *testing.T) {
 		}
 	})
 	scheme := runtime.NewScheme()
-	for _, add := range []func(*runtime.Scheme) error{api.AddToScheme, corev1.AddToScheme, appsv1.AddToScheme, rbacv1.AddToScheme, coordinationv1.AddToScheme, policyv1.AddToScheme} {
+	for _, add := range []func(*runtime.Scheme) error{api.AddToScheme, corev1.AddToScheme, appsv1.AddToScheme, batchv1.AddToScheme, rbacv1.AddToScheme, coordinationv1.AddToScheme, policyv1.AddToScheme} {
 		if err := add(scheme); err != nil {
 			t.Fatal(err)
 		}
@@ -255,6 +256,10 @@ func TestControlPlane(t *testing.T) {
 	})
 
 	t.Run("workload-reconciliation", func(t *testing.T) { testWorkloads(t, cfg, scheme, admin, &role, makeCluster) })
+
+	t.Run("release-http-contract", func(t *testing.T) { testReleaseContract(t, cfg, scheme, admin, &role, makeCluster) })
+
+	t.Run("read-cache-resources", func(t *testing.T) { testReadCache(t, cfg, scheme, admin, &role) })
 
 	observed := makeCluster("observed")
 	if err := admin.Create(ctx, observed); err != nil {

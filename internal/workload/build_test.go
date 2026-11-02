@@ -7,8 +7,11 @@ import (
 	"reflect"
 	"strings"
 	"testing"
+	"time"
 
 	api "github.com/wsq2333/curvine-operator/api/v1alpha1"
+	"github.com/wsq2333/curvine-operator/internal/curvine/v054"
+	"github.com/wsq2333/curvine-operator/internal/observe"
 	appsv1 "k8s.io/api/apps/v1"
 	corev1 "k8s.io/api/core/v1"
 	policyv1 "k8s.io/api/policy/v1"
@@ -207,5 +210,108 @@ func TestWorkerDNSLength(t *testing.T) {
 	}
 	if _, err := Build(c, Contract); err == nil {
 		t.Fatal("overlong worker DNS accepted")
+	}
+}
+
+func TestReleaseContractAndMigrationFence(t *testing.T) {
+	c := cluster(t)
+	b, err := Build(c, "curvine-v0.5.4-alpha")
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, o := range b.Objects {
+		if o.GetAnnotations()[ContractAnnotation] != "curvine-v0.5.4-alpha" {
+			t.Fatalf("wrong contract on %s", o.GetName())
+		}
+	}
+	if b.Master.Spec.Template.Annotations[ContractAnnotation] != "curvine-v0.5.4-alpha" {
+		t.Fatal("missing pod contract")
+	}
+	legacy := bundle(t, c)
+	if issue := checkExisting(c, b.Master, legacy.Master); issue == nil || issue.Reason != "RuntimeContractConflict" {
+		t.Fatal("silently migrated legacy resources")
+	}
+	if issue := checkExisting(c, b.Master, b.Master.DeepCopy()); issue != nil {
+		t.Fatalf("release resource rejected: %+v", issue)
+	}
+}
+
+func TestReleaseEngineRejectsDifferentObservationContract(t *testing.T) {
+	c := cluster(t)
+	now := time.Now()
+	e := Engine{Contract: v054.Contract, Now: func() time.Time { return now }}
+	s := &observe.Snapshot{ClusterUID: string(c.UID), Generation: c.Generation, ObservedAt: now, Version: "fixture", Quorum: observe.Healthy, Workers: observe.Healthy, DataAvailability: observe.Healthy}
+	if e.fresh(c, s) {
+		t.Fatal("release engine accepted unbound legacy evidence")
+	}
+	s.Version = ""
+	s.Quorum = observe.Unknown
+	s.DataAvailability = observe.Unknown
+	s.Application = &api.ApplicationObservation{Contract: v054.Contract, SourceCommit: v054.SourceCommit, Reason: "PartialEvidence", Masters: []api.MasterObservation{{Name: "master-0", Role: "Active", Reachable: true}}, Capabilities: []api.CapabilityStatus{{Name: "Quorum", Reason: "NoQuorumProofEndpoint"}}}
+	if !e.fresh(c, s) {
+		t.Fatal("release evidence rejected")
+	}
+	s.Application.SourceCommit = strings.Repeat("a", 40)
+	if e.fresh(c, s) {
+		t.Fatal("wrong source accepted")
+	}
+	s.Application.SourceCommit = v054.SourceCommit
+	s.Application.Contract = "other"
+	if e.fresh(c, s) {
+		t.Fatal("wrong contract accepted")
+	}
+}
+
+func TestReadCacheResourcesAndSecretBoundary(t *testing.T) {
+	data, err := os.ReadFile("../../examples/cluster-read-cache.json")
+	if err != nil {
+		t.Fatal(err)
+	}
+	var c api.CurvineCluster
+	if err = json.Unmarshal(data, &c); err != nil {
+		t.Fatal(err)
+	}
+	c.UID = "cache-uid"
+	c.Generation = 1
+	if _, err := Build(&c, Contract); err == nil {
+		t.Fatal("legacy contract accepted cache mode")
+	}
+	b, err := Build(&c, v054.Contract)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if b.MountJob == nil || b.FUSE == nil {
+		t.Fatal("cache resources missing")
+	}
+	job := b.MountJob.Spec.Template.Spec
+	if job.AutomountServiceAccountToken == nil || *job.AutomountServiceAccountToken {
+		t.Fatal("helper has API token")
+	}
+	encoded, _ := json.Marshal(b)
+	if strings.Contains(string(encoded), "s3.credentials.secret=") || strings.Contains(string(encoded), "AWS_SECRET_ACCESS_KEY") {
+		t.Fatal("credentials in arguments or environment")
+	}
+	if b.FUSE.Spec.UpdateStrategy.Type != appsv1.OnDeleteDaemonSetStrategyType {
+		t.Fatal("automatic FUSE rollout enabled")
+	}
+	if b.FUSE.Spec.Template.Spec.NodeSelector["storage.curvine.io/fuse"] != "enabled" {
+		t.Fatal("FUSE not restricted to opted-in nodes")
+	}
+	for _, o := range b.Objects {
+		if cm, ok := o.(*corev1.ConfigMap); ok {
+			if !strings.Contains(cm.Data["fuse.toml"], "readonly = true") || !strings.Contains(cm.Data["curvine-cluster.toml"], "free_ratio = 0.15") {
+				t.Fatal("read-only or space budget missing")
+			}
+		}
+	}
+	// Scaling changes no mount/client config, preventing accidental restarts.
+	old := b.FUSE.Spec.Template.DeepCopy()
+	c.Spec.WorkerPools[0].Replicas++
+	after, err := Build(&c, v054.Contract)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !reflect.DeepEqual(old, &after.FUSE.Spec.Template) {
+		t.Fatal("expansion changes FUSE template")
 	}
 }

@@ -11,4 +11,4 @@ patches:
     patch: |-
       - op: add
         path: /spec/template/spec/containers/0/args/-
-        value: --workload-contract=curvine-728d2a46
+        value: --workload-contract=curvine-v0.5.4-alpha

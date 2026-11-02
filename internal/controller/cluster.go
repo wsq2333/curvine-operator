@@ -7,9 +7,11 @@ import (
 	"time"
 
 	api "github.com/wsq2333/curvine-operator/api/v1alpha1"
+	"github.com/wsq2333/curvine-operator/internal/cacheobserve"
 	"github.com/wsq2333/curvine-operator/internal/observe"
 	"github.com/wsq2333/curvine-operator/internal/workload"
 	appsv1 "k8s.io/api/apps/v1"
+	batchv1 "k8s.io/api/batch/v1"
 	corev1 "k8s.io/api/core/v1"
 	policyv1 "k8s.io/api/policy/v1"
 	"k8s.io/apimachinery/pkg/api/equality"
@@ -51,7 +53,7 @@ func (r *ClusterReconciler) SetupWithManager(mgr ctrl.Manager) error {
 	b := ctrl.NewControllerManagedBy(mgr).
 		For(&api.CurvineCluster{}, builder.WithPredicates(predicate.GenerationChangedPredicate{}))
 	if r.WorkloadContract != "" {
-		b = b.Owns(&appsv1.StatefulSet{}).Owns(&corev1.Service{}).
+		b = b.Owns(&appsv1.StatefulSet{}).Owns(&appsv1.DaemonSet{}).Owns(&batchv1.Job{}).Owns(&corev1.Service{}).
 			Owns(&corev1.ConfigMap{}).Owns(&policyv1.PodDisruptionBudget{}).
 			Watches(&corev1.Pod{}, handler.EnqueueRequestsFromMapFunc(clusterForChild)).
 			Watches(&corev1.PersistentVolumeClaim{}, handler.EnqueueRequestsFromMapFunc(clusterForChild))
@@ -152,6 +154,26 @@ func (r *ClusterReconciler) Reconcile(ctx context.Context, req ctrl.Request) (ct
 		snapshot = nil
 		reason, message = "InvalidObservation", "The sample expired while reconciling Kubernetes resources"
 	}
+	cacheHealth := cacheobserve.Unknown()
+	if latest.Spec.ReadCache != nil && r.WorkloadContract != "" {
+		probeCtx, cancel := context.WithTimeout(ctx, 5*time.Second)
+		cacheHealth = cacheobserve.Collect(probeCtx, reader, &latest, nil)
+		cancel()
+		// FUSE probes are another asynchronous read; fence status with current intent.
+		var current api.CurvineCluster
+		if err := reader.Get(ctx, req.NamespacedName, &current); err != nil {
+			return ctrl.Result{}, client.IgnoreNotFound(err)
+		}
+		if current.UID != latest.UID || current.Generation != latest.Generation || !current.DeletionTimestamp.IsZero() {
+			return ctrl.Result{RequeueAfter: time.Second}, nil
+		}
+		latest = current
+	}
+	if snapshot != nil && snapshot.Validate(target, now(), positive(r.MaxObservationAge, 90*time.Second)) != nil {
+		snapshot = nil
+		reason = "InvalidObservation"
+		message = "Application sample expired during read-cache probing"
+	}
 	base := latest.DeepCopy()
 	latest.Status.ObservedGeneration = latest.Generation
 	set := func(typ string, status metav1.ConditionStatus, why, detail string) {
@@ -178,7 +200,7 @@ func (r *ClusterReconciler) Reconcile(ctx context.Context, req ctrl.Request) (ct
 		set(Ready, status, reason, message)
 	} else {
 		timestamp := metav1.NewTime(snapshot.ObservedAt)
-		latest.Status.Observation = &api.ObservationStatus{SampleTime: timestamp, Version: snapshot.Version, RegisteredWorkers: snapshot.RegisteredWorkers}
+		latest.Status.Observation = &api.ObservationStatus{SampleTime: timestamp, Version: snapshot.Version, RegisteredWorkers: snapshot.RegisteredWorkers, Application: snapshot.Application.DeepCopy()}
 		latest.Status.LastSuccessfulObservationTime = &timestamp
 		set(ObservationReady, metav1.ConditionTrue, reason, message)
 		for _, check := range []struct {
@@ -188,6 +210,15 @@ func (r *ClusterReconciler) Reconcile(ctx context.Context, req ctrl.Request) (ct
 			{QuorumHealthy, snapshot.Quorum}, {WorkersHealthy, snapshot.Workers}, {DataAvailable, snapshot.DataAvailability},
 		} {
 			status, why, detail := healthCondition(check.health)
+			if status == metav1.ConditionUnknown && snapshot.Application != nil {
+				capability := map[string]string{QuorumHealthy: "Quorum", DataAvailable: "DataAvailability"}[check.typ]
+				for _, cap := range snapshot.Application.Capabilities {
+					if cap.Name == capability && !cap.Supported {
+						why = cap.Reason
+						detail = "The selected application contract does not expose proof for this requirement"
+					}
+				}
+			}
 			set(check.typ, status, why, detail)
 		}
 		state := observe.Healthy
@@ -202,6 +233,41 @@ func (r *ClusterReconciler) Reconcile(ctx context.Context, req ctrl.Request) (ct
 		}
 		status, why, detail := healthCondition(state)
 		set(Ready, status, why, detail)
+	}
+	if latest.Spec.ReadCache != nil {
+		for _, entry := range []struct {
+			name   string
+			health observe.Health
+		}{{"OriginMountReady", cacheHealth.Mount}, {"OriginReachable", cacheHealth.Origin}, {"ReadPathVerified", cacheHealth.Read}, {"CacheReady", cacheHealth.Cache}} {
+			status, why, _ := healthCondition(entry.health)
+			if entry.health == observe.Unknown {
+				why = "ProbeEvidenceUnavailable"
+			}
+			set(entry.name, status, why, "Scoped evidence covers the configured immutable probe and opted-in FUSE nodes; it is not a global data or quorum guarantee")
+		}
+		degraded := metav1.ConditionUnknown
+		why := "ProbeEvidenceUnavailable"
+		if cacheHealth.Read == observe.Healthy && cacheHealth.Mount == observe.Healthy {
+			degraded = metav1.ConditionFalse
+			why = "ReadPathVerified"
+			if cacheHealth.Cache != observe.Healthy || cacheHealth.Origin != observe.Healthy {
+				degraded = metav1.ConditionTrue
+				why = "CacheOrOriginDegraded"
+			}
+		} else if cacheHealth.Read == observe.Unhealthy || cacheHealth.Mount == observe.Unhealthy {
+			degraded = metav1.ConditionTrue
+			why = "ReadPathFailed"
+		}
+		set("Degraded", degraded, why, "Read-cache service and origin evidence are evaluated separately")
+		// Read-cache readiness is scoped to the declared immutable object, not quorum.
+		state := cacheHealth.Read
+		if cacheHealth.Mount == observe.Unhealthy {
+			state = observe.Unhealthy
+		} else if cacheHealth.Mount == observe.Unknown && state == observe.Healthy {
+			state = observe.Unknown
+		}
+		status, why, _ := healthCondition(state)
+		set(Ready, status, why, "Read-cache readiness verifies the configured object through the managed FUSE clients; quorum and global data availability remain separate")
 	}
 	set(ResourcesReady, resources.Status, resources.Reason, resources.Message)
 	progressing := metav1.ConditionFalse

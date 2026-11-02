@@ -1,12 +1,14 @@
 # S2 工作负载构建与持续收敛
 
-本轮实现 S2 的 Kubernetes 资源执行层，并通过单元测试和本地 envtest。**尚未完成 S2 的真实部署验收**：没有确定可用的 Curvine 镜像 digest、StorageClass 或应用 Observer，未执行真实 Pod 启动、Raft、文件读写和卷恢复测试。
+> 本文原有 Worker 门槛描述针对普通集群。新增不可变读缓存用途的分配门槛、Mount Job、FUSE 和探针语义见 [读缓存契约](read-cache.md)；quorum/全量数据可用性限制并未解除。
+
+本轮实现 S2 的 Kubernetes 资源执行层，并通过单元测试和本地 envtest。**尚未完成 S2 的真实部署验收**：已接入 v0.5.4-alpha 部分观测 Observer，但没有确定可用的 Curvine 镜像 digest、StorageClass 或完整应用健康证明，未执行真实 Pod 启动、Raft、文件读写和卷恢复测试。
 
 ## 启用边界与运行契约
 
-默认 manager 保留只观察模式。显式设置 `--workload-contract=curvine-728d2a46` 才启用工作负载管理；其他非空值会在启动时被拒绝。这个名称表示源码级启动/配置契约，不是已验证的镜像版本，也不意味着任意满足 digest 语法的镜像都兼容。
+默认 manager 保留只观察模式。显式设置 `--workload-contract=curvine-v0.5.4-alpha` 启用发布版工作负载管理及 HTTP Observer；保留旧 `curvine-728d2a46` 契约，其他非空值会在启动时被拒绝。已有不同契约资源会被阻断，不自动升级。这个名称表示源码级启动/配置契约，不是已验证的镜像版本，也不意味着任意满足 digest 语法的镜像都兼容。
 
-契约依据 Curvine commit `728d2a46` 的 `ClusterConf`/环境覆盖、容器布局、Master journal 初始化和探针示例。实现要求：
+初始契约依据 Curvine commit `728d2a46`，现已按 `v0.5.4-alpha/89df141` 复核以下启动与配置布局；发布版观测和兼容范围见 [应用契约](contracts/v0.5.4-alpha.md)。核查覆盖 `ClusterConf`/环境覆盖、容器布局、Master journal 初始化和探针示例。实现要求：
 
 - `/app/curvine/lib/curvine-server --service master|worker --conf /etc/curvine/curvine-cluster.toml`，直接运行服务作为 PID 1。
 - `CURVINE_MASTER_HOSTNAME` 同时覆盖 Master 与 journal hostname；Worker 使用 `CURVINE_WORKER_HOSTNAME`。Downward API 和环境变量展开生成完整 Pod FQDN；不使用有 Linux 64 字节限制的 `setHostnameAsFQDN`。
@@ -15,7 +17,7 @@
 - 容器使用 UID/GID 1000、fsGroup 1000、只读根文件系统，无 privileged/hostNetwork/hostPath、不挂载 API token。镜像可执行文件/动态库和存储驱动必须支持这些约束，尚待真实镜像验证。
 - Worker 保留 10% 物理可用空间；无固定 10 GB 预留，避免较小测试卷天然不可写。后续容量策略另行版本化。
 
-manager 仍注入 `observe.Unsupported`。没有真实 Observer 时，Master 和相关资源可以创建，但 Worker StatefulSet 保持 `WaitingForQuorum`。目前**没有仅修改一个运行参数就能得到真实应用观察的适配器**，也没有绕过健康门槛的模拟健康开关。
+默认 manager 注入 `observe.Unsupported`。选择发布版契约后注入真实 HTTP Observer；也可在观察模式设置 `--observer-contract=curvine-v0.5.4-alpha`。Master 和相关资源可以创建，但 HTTP 契约缺少 quorum 证明时 Worker StatefulSet 保持 `QuorumObservationUnsupported`。没有绕过健康门槛的模拟健康开关。
 
 本地源码 HTTP overview 中的 `master_state`、Worker 数量等字段不能单独证明 quorum、版本与数据可用性；本轮不把这些字段猜测为 Healthy。
 

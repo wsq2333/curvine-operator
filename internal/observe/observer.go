@@ -4,6 +4,7 @@ package observe
 
 import (
 	"context"
+	"encoding/hex"
 	"errors"
 	"fmt"
 	"strings"
@@ -47,6 +48,7 @@ type Snapshot struct {
 	Quorum            Health
 	Workers           Health
 	DataAvailability  Health
+	Application       *api.ApplicationObservation
 	RegisteredWorkers *int32
 }
 
@@ -54,8 +56,7 @@ type Observer interface {
 	Observe(context.Context, Target) (Snapshot, error)
 }
 
-// Unsupported is the manager's explicit default until a real version adapter
-// and its application-level contract tests are available.
+// Unsupported is the explicit default when no application contract is selected.
 type Unsupported struct{}
 
 func (Unsupported) Observe(context.Context, Target) (Snapshot, error) {
@@ -69,8 +70,8 @@ func (s Snapshot) Validate(target Target, now time.Time, maxAge time.Duration) e
 	if s.ObservedAt.IsZero() || now.Sub(s.ObservedAt) > maxAge || s.ObservedAt.After(now.Add(5*time.Second)) {
 		return fmt.Errorf("observation timestamp is missing, stale or in the future")
 	}
-	if strings.TrimSpace(s.Version) == "" || len(s.Version) > 128 {
-		return fmt.Errorf("observation must identify the application version")
+	if (strings.TrimSpace(s.Version) == "" && (s.Application == nil || s.Application.Contract == "")) || len(s.Version) > 128 {
+		return fmt.Errorf("observation must identify a reported version or an explicit adapter contract")
 	}
 	for _, h := range []Health{s.Quorum, s.Workers, s.DataAvailability} {
 		if h != Unknown && h != Healthy && h != Unhealthy {
@@ -79,6 +80,47 @@ func (s Snapshot) Validate(target Target, now time.Time, maxAge time.Duration) e
 	}
 	if s.RegisteredWorkers != nil && *s.RegisteredWorkers < 0 {
 		return fmt.Errorf("negative worker count")
+	}
+	if s.Application != nil {
+		a := s.Application
+		if strings.TrimSpace(a.Contract) == "" || len(a.Contract) > 128 || len(a.SourceCommit) != 40 || a.Reason == "" || len(a.Reason) > 64 || len(a.Masters) == 0 || len(a.Masters) > 5 || len(a.WorkerPools) > 64 || len(a.Capabilities) == 0 || len(a.Capabilities) > 8 {
+			return fmt.Errorf("invalid application evidence bounds")
+		}
+		if _, err := hex.DecodeString(a.SourceCommit); err != nil {
+			return fmt.Errorf("invalid source commit")
+		}
+		names := map[string]bool{}
+		for _, m := range a.Masters {
+			if m.Name == "" || len(m.Name) > 63 || names[m.Name] {
+				return fmt.Errorf("invalid master evidence")
+			}
+			names[m.Name] = true
+			switch m.Role {
+			case "Unknown", "Active", "Standby", "SafeMode", "Exit":
+			default:
+				return fmt.Errorf("invalid master role")
+			}
+			if !m.Reachable && m.Role != "Unknown" {
+				return fmt.Errorf("unreachable master cannot report a role")
+			}
+		}
+		names = map[string]bool{}
+		for _, cap := range a.Capabilities {
+			if cap.Name == "" || len(cap.Name) > 64 || names[cap.Name] || cap.Reason == "" || len(cap.Reason) > 64 {
+				return fmt.Errorf("invalid capability evidence")
+			}
+			names[cap.Name] = true
+			if !cap.Supported && ((cap.Name == "Quorum" && s.Quorum == Healthy) || (cap.Name == "DataAvailability" && s.DataAvailability == Healthy) || (cap.Name == "MasterVersion" && s.Version != "")) {
+				return fmt.Errorf("unsupported capability cannot be reported as verified")
+			}
+		}
+		seen := map[string]bool{}
+		for _, p := range a.WorkerPools {
+			if p.Name == "" || len(p.Name) > 16 || seen[p.Name] || p.Desired < 0 || p.Registered < 0 || p.Fresh < 0 || p.VersionVerified < 0 || p.Fresh > p.Registered || p.VersionVerified > p.Registered {
+				return fmt.Errorf("invalid worker pool evidence")
+			}
+			seen[p.Name] = true
+		}
 	}
 	return nil
 }

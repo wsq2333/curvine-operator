@@ -12,9 +12,11 @@ import (
 
 	api "github.com/wsq2333/curvine-operator/api/v1alpha1"
 	"github.com/wsq2333/curvine-operator/internal/controller"
+	"github.com/wsq2333/curvine-operator/internal/curvine/v054"
 	"github.com/wsq2333/curvine-operator/internal/observe"
 	"github.com/wsq2333/curvine-operator/internal/workload"
 	appsv1 "k8s.io/api/apps/v1"
+	batchv1 "k8s.io/api/batch/v1"
 	coordinationv1 "k8s.io/api/coordination/v1"
 	corev1 "k8s.io/api/core/v1"
 	policyv1 "k8s.io/api/policy/v1"
@@ -40,7 +42,8 @@ func run() error {
 	leaderElection := flag.Bool("leader-elect", true, "enable leader election")
 	poll := flag.Duration("poll-interval", 30*time.Second, "application observation interval")
 	timeout := flag.Duration("observation-timeout", 5*time.Second, "deadline for each observer call")
-	contract := flag.String("workload-contract", "", "opt in to workload management using "+workload.Contract+"; empty observes only")
+	contract := flag.String("workload-contract", "", "opt in to workload management using "+workload.Contract+" or "+v054.Contract+"; empty observes only")
+	observerContract := flag.String("observer-contract", "", "application observer contract; the v0.5.4-alpha workload contract selects its observer automatically")
 	maxAge := flag.Duration("max-observation-age", 90*time.Second, "maximum accepted sample age")
 	opts := zap.Options{Development: false}
 	opts.BindFlags(flag.CommandLine)
@@ -51,8 +54,9 @@ func run() error {
 	if flag.NArg() != 0 || *poll <= 0 || *timeout <= 0 || *maxAge <= 0 || *timeout > *poll {
 		return fmt.Errorf("invalid arguments: durations must be positive and observation-timeout must not exceed poll-interval")
 	}
-	if *contract != "" && *contract != workload.Contract {
-		return fmt.Errorf("unsupported workload contract: %q", *contract)
+	observer, err := selectObserver(*contract, *observerContract)
+	if err != nil {
+		return err
 	}
 	ctrl.SetLogger(zap.New(zap.UseFlagOptions(&opts)))
 	scheme := runtime.NewScheme()
@@ -63,6 +67,9 @@ func run() error {
 		return err
 	}
 	if err := coordinationv1.AddToScheme(scheme); err != nil {
+		return err
+	}
+	if err := batchv1.AddToScheme(scheme); err != nil {
 		return err
 	}
 	if err := appsv1.AddToScheme(scheme); err != nil {
@@ -85,7 +92,7 @@ func run() error {
 		return err
 	}
 	reconciler := &controller.ClusterReconciler{
-		Client: mgr.GetClient(), APIReader: mgr.GetAPIReader(), Observer: observe.Unsupported{},
+		Client: mgr.GetClient(), APIReader: mgr.GetAPIReader(), Observer: observer,
 		WorkloadContract: *contract,
 		PollInterval:     *poll, ObservationTimeout: *timeout, MaxObservationAge: *maxAge,
 	}
@@ -134,4 +141,21 @@ func (r *cacheReadiness) Check(*http.Request) error {
 		return errors.New("informer cache is not synced")
 	}
 	return nil
+}
+
+// Observer-only mode is useful for preflight against an already running cluster.
+func selectObserver(runtimeContract, observerContract string) (observe.Observer, error) {
+	if runtimeContract != "" && !workload.SupportedContract(runtimeContract) {
+		return nil, fmt.Errorf("unsupported workload contract")
+	}
+	if observerContract == "" && runtimeContract == v054.Contract {
+		observerContract = v054.Contract
+	}
+	if observerContract == "" {
+		return observe.Unsupported{}, nil
+	}
+	if observerContract != v054.Contract || (runtimeContract != "" && runtimeContract != observerContract) {
+		return nil, fmt.Errorf("unsupported or mismatched observer and workload contracts")
+	}
+	return v054.New(nil), nil
 }

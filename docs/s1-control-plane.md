@@ -1,6 +1,6 @@
 # S1 Kubernetes 控制面与 Observer 抽象
 
-本文记录 S1 阶段范围。后续 S2 已增加可选资源管理、工作负载 RBAC 和 ResourcesReady/Progressing，参见 [S2 工作负载](s2-workloads.md)；默认观察模式仍保留。
+本文记录 S1 阶段基础范围。最新增量：[v0.5.4-alpha 应用契约](contracts/v0.5.4-alpha.md) 已实现真实只读 HTTP 适配及有界应用诊断状态；quorum/数据可用性及 Master 版本证明仍缺失。下述“本阶段”未实现列表是原始 S1 的范围记录。后续 S2 已增加可选资源管理、工作负载 RBAC 和 ResourcesReady/Progressing，参见 [S2 工作负载](s2-workloads.md)；默认观察模式仍保留。
 
 本阶段实现命名空间内的 CR 监听、规格校验、应用状态观察接口和 status 收敛。尚未实现 Curvine 版本适配器、工作负载创建、扩缩容或升级。默认 Observer 返回 `UnsupportedCapability`，集群 Ready 为 Unknown。
 
@@ -54,7 +54,7 @@ type Observer interface {
 
 Target 提供 CR UID、generation、namespace/name 和独立 Spec 副本。适配器必须只读、遵守 context deadline，且不能把期望副本数当成实际注册数或把 Pod Ready 当作应用健康。
 
-Snapshot 必须带匹配的 UID/generation、采样时间、应用版本，以及 quorum、workers、data availability 三项显式 Health。每项取 Healthy、Unhealthy 或 Unknown；没有证据必须返回 Unknown。RegisteredWorkers 是可选指针，nil 与 0 含义不同。
+Snapshot 必须带匹配的 UID/generation、采样时间、实际应用版本或显式应用适配契约，以及 quorum、workers、data availability 三项显式 Health。每项取 Healthy、Unhealthy 或 Unknown；没有证据必须返回 Unknown。RegisteredWorkers 是可选指针，nil 与 0 含义不同。
 
 默认每 30 秒观察一次，每次 5 秒超时；接受的样本最大年龄为 90 秒，允许至多 5 秒的时钟领先。字段、枚举、身份、时间或计数无效时，整个样本被拒绝。context timeout 需要适配器协作，控制器不会为不遵守取消的实现无限派生 goroutine。
 
@@ -94,4 +94,4 @@ Role/RoleBinding、ServiceAccount、Lease 与被观察 CR 必须位于所选命�
 
 ## 下一步
 
-本次完成 S1 中不依赖具体 Curvine 版本的部分。下一步是实际 Observer 适配器与应用契约测试；工作负载创建仍属于 S2。安全 drain、成员变更、升级和恢复不在 S1 控制器中实现。
+本次完成 S1 中不依赖具体 Curvine 版本的部分。v0.5.4-alpha 的部分观测与契约测试现已补充，剩余工作为上游缺失的健康证明及实机验收；工作负载创建仍属于 S2。安全 drain、成员变更、升级和恢复不在 S1 控制器中实现。

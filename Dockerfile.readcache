@@ -1,0 +1,36 @@
+# syntax=docker/dockerfile:1
+FROM golang:1.26.5-bookworm AS node
+WORKDIR /operator
+COPY go.mod go.sum ./
+RUN go mod download
+COPY . .
+RUN CGO_ENABLED=0 go build -trimpath -o /curvine-cache-node ./cmd/cache-node
+
+FROM rust:1-slim-bookworm AS native
+RUN apt-get update -qq && apt-get install -y --no-install-recommends \
+    git python3 pkg-config libssl-dev protobuf-compiler clang cmake libaio-dev \
+    libudev-dev libfuse3-dev libzstd-dev liblz4-dev libsnappy-dev zlib1g-dev libbz2-dev \
+    && rm -rf /var/lib/apt/lists/*
+WORKDIR /src
+RUN git init && git remote add origin https://github.com/CurvineIO/curvine.git \
+    && git fetch --depth 1 origin 89df141912e96d127421de6e4d36e6e2190d9949 \
+    && git checkout --detach FETCH_HEAD \
+    && test "$(git rev-parse HEAD)" = 89df141912e96d127421de6e4d36e6e2190d9949
+COPY helpers/cache-mount /operator/helpers/cache-mount
+COPY scripts/prepare-cache-helper.py /operator/scripts/prepare-cache-helper.py
+RUN python3 /operator/scripts/prepare-cache-helper.py /src
+RUN cargo build --locked --release -p curvine-cache-mount -p curvine-server -p curvine-fuse \
+    --features curvine-fuse/opendal-s3,curvine-fuse/opendal-oss,curvine-data-transfer/opendal-oss
+
+FROM debian:bookworm-slim
+RUN apt-get update -qq && apt-get install -y --no-install-recommends \
+    ca-certificates libssl3 libfuse3-3 libaio1 libudev1 libzstd1 liblz4-1 libsnappy1v5 zlib1g libbz2-1.0 \
+    && rm -rf /var/lib/apt/lists/* \
+    && mkdir -p /app/curvine/lib /var/log/curvine /var/lib/curvine /var/lib/curvine-state \
+    && chown -R 1000:1000 /app/curvine /var/log/curvine /var/lib/curvine /var/lib/curvine-state
+COPY --from=native /src/target/release/curvine-server /src/target/release/curvine-fuse /src/target/release/curvine-cache-mount /app/curvine/lib/
+COPY --from=node /curvine-cache-node /app/curvine/lib/curvine-cache-node
+USER 1000:1000
+LABEL org.opencontainers.image.source="https://github.com/wsq2333/curvine-operator" \
+      io.curvine.upstream-commit="89df141912e96d127421de6e4d36e6e2190d9949"
+ENTRYPOINT ["/app/curvine/lib/curvine-server"]

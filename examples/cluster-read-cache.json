@@ -1,0 +1,48 @@
+{
+  "apiVersion": "storage.curvine.io/v1alpha1",
+  "kind": "CurvineCluster",
+  "metadata": {
+    "name": "read-cache",
+    "namespace": "curvine-system"
+  },
+  "spec": {
+    "clusterID": "cv-prod",
+    "clusterDomain": "cluster.local",
+    "profile": "production",
+    "image": "registry.example.com/curvine@sha256:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+    "deletionPolicy": "Retain",
+    "master": {
+      "replicas": 3,
+      "storage": {
+        "storageClassName": "example-ssd",
+        "sizeGiB": 100
+      }
+    },
+    "workerPools": [
+      {
+        "name": "ssd",
+        "replicas": 3,
+        "storage": {
+          "storageClassName": "example-local-ssd",
+          "sizeGiB": 1000
+        }
+      }
+    ],
+    "readCache": {
+      "backend": "S3",
+      "source": "s3://example-datasets/immutable-v1",
+      "endpoint": "https://s3.example.com",
+      "region": "us-east-1",
+      "credentialsSecret": "curvine-origin-readonly",
+      "consistency": "Immutable",
+      "ttlSeconds": 86400,
+      "readConcurrency": 4,
+      "minFreePercent": 15,
+      "probe": {
+        "object": "probe.txt",
+        "sha256": "e0422944a9bb4713f9f1f7ba6433b272bd63cb7e564296226ecf984ee5f98128",
+        "sizeBytes": 25
+      }
+    }
+  }
+}

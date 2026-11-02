@@ -4,12 +4,15 @@ package workload
 
 import (
 	"crypto/sha256"
+	"encoding/json"
 	"fmt"
 	"sort"
 	"strings"
 
 	api "github.com/wsq2333/curvine-operator/api/v1alpha1"
+	"github.com/wsq2333/curvine-operator/internal/curvine/v054"
 	appsv1 "k8s.io/api/apps/v1"
+	batchv1 "k8s.io/api/batch/v1"
 	corev1 "k8s.io/api/core/v1"
 	policyv1 "k8s.io/api/policy/v1"
 	"k8s.io/apimachinery/pkg/api/resource"
@@ -31,15 +34,17 @@ const (
 )
 
 type Bundle struct {
-	Objects []client.Object
-	Master  *appsv1.StatefulSet
-	Workers []*appsv1.StatefulSet
+	Objects  []client.Object
+	Master   *appsv1.StatefulSet
+	Workers  []*appsv1.StatefulSet
+	MountJob *batchv1.Job
+	FUSE     *appsv1.DaemonSet
 }
 
 // Build is pure. Configuration is independent of worker replica counts and pool
 // order, so expansion cannot silently roll masters or existing workers.
 func Build(c *api.CurvineCluster, contract string) (*Bundle, error) {
-	if contract != Contract {
+	if !SupportedContract(contract) || (c.Spec.ReadCache != nil && contract != v054.Contract) {
 		return nil, fmt.Errorf("unsupported runtime contract")
 	}
 	if err := c.Intent().Validate(); err != nil {
@@ -49,7 +54,12 @@ func Build(c *api.CurvineCluster, contract string) (*Bundle, error) {
 		return nil, fmt.Errorf("a persisted cluster UID is required")
 	}
 	config := configuration(c)
-	hash := fmt.Sprintf("%x", sha256.Sum256([]byte(config)))
+	hashInput := config
+	if c.Spec.ReadCache != nil {
+		data, _ := json.Marshal(c.Spec.ReadCache)
+		hashInput += string(data) + string(c.UID)
+	}
+	hash := fmt.Sprintf("%x", sha256.Sum256([]byte(hashInput)))
 	cm := &corev1.ConfigMap{
 		TypeMeta:   metav1.TypeMeta{APIVersion: "v1", Kind: "ConfigMap"},
 		ObjectMeta: metadata(c, c.Name+"-config-"+hash[:12], "config", ""),
@@ -67,7 +77,25 @@ func Build(c *api.CurvineCluster, contract string) (*Bundle, error) {
 		b.Workers = append(b.Workers, sts)
 		b.Objects = append(b.Objects, service(c, sts), budget(c, sts), sts)
 	}
+	if c.Spec.ReadCache != nil {
+		cacheResources(c, b, cm)
+	}
+	// Stamp the selected contract on every managed object and pod template.
+	// Legacy annotations remain unchanged unless explicitly selecting a new profile.
+	for _, obj := range b.Objects {
+		obj.GetAnnotations()[ContractAnnotation] = contract
+		if sts, ok := obj.(*appsv1.StatefulSet); ok {
+			sts.Spec.Template.Annotations[ContractAnnotation] = contract
+		}
+		if ds, ok := obj.(*appsv1.DaemonSet); ok {
+			ds.Spec.Template.Annotations[ContractAnnotation] = contract
+		}
+	}
 	return b, nil
+}
+
+func SupportedContract(contract string) bool {
+	return contract == Contract || contract == v054.Contract
 }
 
 func labels(c *api.CurvineCluster, role, pool string) map[string]string {
@@ -163,7 +191,13 @@ func configuration(c *api.CurvineCluster) string {
 		fmt.Fprintf(&b, "  { hostname = %q, port = 8995 },\n", masterDNS(c, i))
 	}
 	b.WriteString("]\n\n[log]\nlevel = \"info\"\nlog_dir = \"/var/log/curvine\"\nfile_name = \"client.log\"\n\n[discovery]\nenabled = false\n\n[mds]\nenabled = false\n\n[transfer]\nenabled = false\n")
-	return b.String()
+	config := b.String()
+	if c.Spec.ReadCache != nil {
+		config = strings.Replace(config, "free_ratio = 0.1", fmt.Sprintf("free_ratio = %.2f", float64(c.Spec.ReadCache.MinFreePercent)/100), 1)
+		config = strings.Replace(config, "[client]\n", "[client]\nenable_unified_fs = true\nenable_rust_read_ufs = true\nauto_cache_enabled = true\naudit_logging_enabled = false\n", 1)
+		config = strings.Replace(config, "[transfer]\nenabled = false", "[transfer]\nenabled = false\nclient_pending_queue_size = 32\nclient_submit_concurrency = 2", 1)
+	}
+	return config
 }
 func masterDNS(c *api.CurvineCluster, i int) string {
 	return fmt.Sprintf("%s-master-%d.%s-master.%s.svc.%s", c.Name, i, c.Name, c.Namespace, c.Spec.ClusterDomain)

@@ -117,6 +117,81 @@ spec:
                 x-kubernetes-validations:
                 - message: profile migration is not supported
                   rule: self == oldSelf
+              readCache:
+                description: |-
+                  ReadCacheSpec is an opt-in, immutable deployment purpose. UFS is the source
+                  of truth; credentials must grant only read/list on the declared prefix.
+                  The first implementation serves immutable datasets through read-only FUSE.
+                properties:
+                  backend:
+                    enum:
+                    - S3
+                    - OSS
+                    type: string
+                  consistency:
+                    enum:
+                    - Immutable
+                    type: string
+                  credentialsSecret:
+                    description: |-
+                      CredentialsSecret must contain accessKey and secretKey. The manager never
+                      reads Secret values; Kubernetes projects them only into the mount/probe pods.
+                    maxLength: 253
+                    type: string
+                  endpoint:
+                    maxLength: 253
+                    type: string
+                  minFreePercent:
+                    maximum: 50
+                    minimum: 10
+                    type: integer
+                  probe:
+                    properties:
+                      object:
+                        description: Relative, immutable object key below Source.
+                          It must be non-sensitive.
+                        maxLength: 512
+                        type: string
+                      sha256:
+                        pattern: ^[a-f0-9]{64}$
+                        type: string
+                      sizeBytes:
+                        maximum: 16777216
+                        minimum: 1
+                        type: integer
+                    required:
+                    - object
+                    - sha256
+                    - sizeBytes
+                    type: object
+                  readConcurrency:
+                    description: Per-reader UFS range concurrency; not a cluster-wide
+                      request rate limit.
+                    maximum: 16
+                    minimum: 1
+                    type: integer
+                  region:
+                    maxLength: 63
+                    type: string
+                  source:
+                    maxLength: 1024
+                    type: string
+                  ttlSeconds:
+                    maximum: 2592000
+                    minimum: 60
+                    type: integer
+                required:
+                - backend
+                - consistency
+                - credentialsSecret
+                - endpoint
+                - minFreePercent
+                - probe
+                - readConcurrency
+                - region
+                - source
+                - ttlSeconds
+                type: object
               workerPools:
                 items:
                   properties:
@@ -166,6 +241,10 @@ spec:
             x-kubernetes-validations:
             - message: production requires 3 or 5 masters
               rule: self.profile != 'production' || self.master.replicas >= 3
+            - message: deployment purpose is immutable
+              rule: has(self.readCache) == has(oldSelf.readCache)
+            - message: read cache configuration changes require a dedicated workflow
+              rule: '!has(self.readCache) || self.readCache == oldSelf.readCache'
           status:
             properties:
               conditions:
@@ -235,6 +314,114 @@ spec:
                   Observation contains only the current validated application sample.
                   It is cleared on unsupported, failed, stale or mismatched observations.
                 properties:
+                  application:
+                    description: |-
+                      ApplicationObservation reports bounded release-specific evidence. Contract
+                      and SourceCommit describe the adapter, not the binaries currently running.
+                    properties:
+                      capabilities:
+                        items:
+                          properties:
+                            name:
+                              maxLength: 64
+                              type: string
+                            reason:
+                              maxLength: 64
+                              type: string
+                            supported:
+                              type: boolean
+                          required:
+                          - name
+                          - reason
+                          - supported
+                          type: object
+                        maxItems: 8
+                        type: array
+                        x-kubernetes-list-map-keys:
+                        - name
+                        x-kubernetes-list-type: map
+                      contract:
+                        maxLength: 128
+                        type: string
+                      masters:
+                        items:
+                          properties:
+                            name:
+                              maxLength: 63
+                              type: string
+                            reachable:
+                              type: boolean
+                            role:
+                              enum:
+                              - Unknown
+                              - Active
+                              - Standby
+                              - SafeMode
+                              - Exit
+                              type: string
+                          required:
+                          - name
+                          - reachable
+                          - role
+                          type: object
+                        maxItems: 5
+                        type: array
+                        x-kubernetes-list-map-keys:
+                        - name
+                        x-kubernetes-list-type: map
+                      reason:
+                        maxLength: 64
+                        type: string
+                      sourceCommit:
+                        maxLength: 40
+                        type: string
+                      workerPools:
+                        items:
+                          properties:
+                            desired:
+                              format: int32
+                              minimum: 0
+                              type: integer
+                            fresh:
+                              description: Fresh counts Live endpoints with a recent
+                                Master-recorded heartbeat.
+                              format: int32
+                              minimum: 0
+                              type: integer
+                            name:
+                              maxLength: 16
+                              type: string
+                            registered:
+                              description: Registered counts matching Live endpoints,
+                                not desired replicas.
+                              format: int32
+                              minimum: 0
+                              type: integer
+                            versionVerified:
+                              description: VersionVerified counts structured reports
+                                matching the pinned source.
+                              format: int32
+                              minimum: 0
+                              type: integer
+                          required:
+                          - desired
+                          - fresh
+                          - name
+                          - registered
+                          - versionVerified
+                          type: object
+                        maxItems: 64
+                        type: array
+                        x-kubernetes-list-map-keys:
+                        - name
+                        x-kubernetes-list-type: map
+                    required:
+                    - capabilities
+                    - contract
+                    - masters
+                    - reason
+                    - sourceCommit
+                    type: object
                   registeredWorkers:
                     format: int32
                     minimum: 0
@@ -243,11 +430,12 @@ spec:
                     format: date-time
                     type: string
                   version:
+                    description: Version is populated only when an adapter can verify
+                      the running version.
                     maxLength: 128
                     type: string
                 required:
                 - sampleTime
-                - version
                 type: object
               observedGeneration:
                 description: ObservedGeneration is processed intent, not proof of

@@ -22,8 +22,12 @@ rules:
     resources: [pods, persistentvolumeclaims]
     verbs: [get, list, watch]
   - apiGroups: [apps]
-    resources: [statefulsets]
+    resources: [statefulsets, daemonsets]
     verbs: [get, list, watch, create, patch]
   - apiGroups: [policy]
     resources: [poddisruptionbudgets]
     verbs: [get, list, watch, create, patch]
+
+  - apiGroups: ["batch"]
+    resources: ["jobs"]
+    verbs: ["get", "list", "watch", "create"]

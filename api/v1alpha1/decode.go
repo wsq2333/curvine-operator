@@ -6,6 +6,7 @@ import (
 	"fmt"
 	"io"
 	"reflect"
+	"strings"
 	"unicode/utf8"
 )
 
@@ -45,6 +46,9 @@ func Decode(r io.Reader) (Cluster, error) {
 }
 
 func checkValue(d *json.Decoder, typ reflect.Type, path string) error {
+	for typ.Kind() == reflect.Pointer {
+		typ = typ.Elem()
+	}
 	token, err := d.Token()
 	if err != nil {
 		return fmt.Errorf("%s: %w", path, err)
@@ -60,7 +64,7 @@ func checkValue(d *json.Decoder, typ reflect.Type, path string) error {
 		fields := make(map[string]reflect.Type, typ.NumField())
 		for i := 0; i < typ.NumField(); i++ {
 			f := typ.Field(i)
-			fields[f.Tag.Get("json")] = f.Type
+			fields[strings.Split(f.Tag.Get("json"), ",")[0]] = f.Type
 		}
 		seen := make(map[string]bool)
 		for d.More() {

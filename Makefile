@@ -5,6 +5,7 @@ CONTROLLER_GEN_VERSION := v0.21.0
 build:
 	go build -trimpath -o bin/curvine-operator ./cmd/curvine-operator
 	go build -trimpath -o bin/manager ./cmd/manager
+	go build -trimpath -o bin/curvine-cache-node ./cmd/cache-node
 
 test:
 	go test -race ./...

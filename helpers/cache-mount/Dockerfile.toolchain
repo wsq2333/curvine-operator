@@ -1,0 +1,5 @@
+FROM rust:1-slim-bookworm
+RUN apt-get update -qq && apt-get install -y --no-install-recommends \
+    pkg-config libssl-dev protobuf-compiler clang cmake libaio-dev libudev-dev \
+    libfuse3-dev libzstd-dev liblz4-dev libsnappy-dev zlib1g-dev libbz2-dev git python3 ca-certificates \
+    && rm -rf /var/lib/apt/lists/*

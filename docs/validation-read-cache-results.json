@@ -1,0 +1,23 @@
+{
+  "date": "2026-11-02",
+  "platform": "Linux arm64 (isolated Docker)",
+  "curvineSourceCommit": "89df141912e96d127421de6e4d36e6e2190d9949",
+  "sourceBackend": "read-only S3 protocol fixture, not cloud IAM or OSS validation",
+  "scenarios": {
+    "mount_idempotent": true,
+    "bad_credentials_rejected": true,
+    "credential_drift_blocked": true,
+    "cold_read_sha256": true,
+    "cold_miss_counter": true,
+    "cold_origin_get": true,
+    "warm_hit_counter": true,
+    "create_overwrite_delete_rename_rejected": true,
+    "warm_read_origin_down": true,
+    "worker_down_read_sha256": true,
+    "worker_down_ufs_get": true,
+    "worker_down_not_cache_ready": true,
+    "changed_origin_rejected": true,
+    "no_origin_writes": true,
+    "passed": true
+  }
+}

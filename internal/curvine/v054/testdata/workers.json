@@ -1,0 +1,14 @@
+{
+  "live_workers": [{
+    "address": {"worker_id": 42, "hostname": "${WORKER_HOST}", "ip_addr": "192.0.2.1", "rpc_port": 8997, "web_port": 9000},
+    "weight": 1,
+    "software_version": "0.2.2",
+    "startup_time_ms": 1700000000000,
+    "capacity": 1000, "available": 800, "fs_used": 200, "non_fs_used": 0, "reserved_bytes": 0,
+    "last_update": ${NOW_MS}, "block_num": 1,
+    "storage_map": {"data": {"failed": false}},
+    "status": "Live", "worker_session_id": "fixture-session-1",
+    "component_info": {"component": "worker", "release_version": "0.2.2", "git_commit": "89df141912e96d127421de6e4d36e6e2190d9949", "git_tag": "v0.5.4-alpha", "git_branch": "", "protocol_version": 1, "min_protocol_version": 1, "capabilities": []}
+  }],
+  "lost_workers": []
+}

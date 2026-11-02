@@ -7,6 +7,7 @@ import (
 	"encoding/hex"
 	"encoding/json"
 	"fmt"
+	"reflect"
 	"sort"
 
 	api "github.com/wsq2333/curvine-operator/api/v1alpha1"
@@ -94,6 +95,12 @@ func Build(desired api.Cluster, previous *api.Cluster) (Plan, error) {
 			"Observe Raft quorum, worker registration and application-level health; Pod Ready is insufficient",
 		},
 	}
+	masterGate := "quorum"
+	if desired.Spec.ReadCache != nil {
+		masterGate = "master-startup"
+		p.RuntimeChecksRequired[3] = "Worker allocation requires Master workload startup; quorum remains unverified and destructive operations stay blocked"
+		p.RuntimeChecksRequired = append(p.RuntimeChecksRequired, "Verify read-only UFS mount, immutable probe hash, FUSE mount and cache-hit/fallback evidence; source credentials must not grant writes")
+	}
 	if previous == nil {
 		p.Steps = append(p.Steps,
 			Step{ID: "identity", Operation: "reserve-cluster-identity-and-check-retained-volumes", Target: desired.Spec.ClusterID},
@@ -101,8 +108,15 @@ func Build(desired api.Cluster, previous *api.Cluster) (Plan, error) {
 			Step{ID: "masters", Operation: "bootstrap-persistent-master-statefulset", Target: desired.Metadata.Name + "-master", DependsOn: []string{"config"}, Replicas: &ReplicaChange{To: desired.Spec.Master.Replicas}},
 			Step{ID: "quorum", Operation: "wait-for-application-raft-quorum", Target: desired.Metadata.Name + "-master", DependsOn: []string{"masters"}},
 		)
+		if desired.Spec.ReadCache != nil {
+			p.Steps = p.Steps[:len(p.Steps)-1]
+			p.Steps = append(p.Steps, Step{ID: masterGate, Operation: "wait-for-master-startup-without-claiming-quorum", Target: desired.Metadata.Name + "-master", DependsOn: []string{"masters"}})
+		}
 		for _, pool := range pools(desired) {
-			p.Steps = append(p.Steps, Step{ID: "workers-" + pool.Name, Operation: "create-persistent-worker-pool", Target: pool.Name, DependsOn: []string{"quorum"}, Replicas: &ReplicaChange{To: pool.Replicas}})
+			p.Steps = append(p.Steps, Step{ID: "workers-" + pool.Name, Operation: "create-persistent-worker-pool", Target: pool.Name, DependsOn: []string{masterGate}, Replicas: &ReplicaChange{To: pool.Replicas}})
+		}
+		if desired.Spec.ReadCache != nil {
+			p.Steps = append(p.Steps, Step{ID: "read-cache", Operation: "register-read-only-origin-and-start-fuse", Target: desired.Metadata.Name, DependsOn: []string{masterGate}})
 		}
 		return p, nil
 	}
@@ -112,6 +126,9 @@ func Build(desired api.Cluster, previous *api.Cluster) (Plan, error) {
 		return Plan{}, err
 	}
 	old := previous.Spec
+	if !reflect.DeepEqual(old.ReadCache, desired.Spec.ReadCache) {
+		p.block("ReadCacheWorkflowRequired", "deployment purpose, origin, credentials and cache policy changes require a dedicated workflow")
+	}
 	next := desired.Spec
 	if previous.Metadata != desired.Metadata || old.ClusterID != next.ClusterID || old.ClusterDomain != next.ClusterDomain {
 		p.block("IdentityImmutable", "name, namespace, clusterID and clusterDomain require an explicit migration")

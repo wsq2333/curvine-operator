@@ -1,6 +1,6 @@
 # 实施路线与验收门槛
 
-按依赖和验收结果推进，不以未验证的时间估算承诺上线。S0 已完成本地验收。S1 的 Kubernetes 控制面和 Observer 抽象已实现，具体 Curvine 版本适配及应用契约测试待完成；S2 的资源构建、受控执行与监听已通过本地验证，真实部署/读写/恢复验收待完成；S3 及之后尚未完成。参见 [S0 契约](s0.md)、[S1 控制面](s1-control-plane.md) 与 [S2 工作负载](s2-workloads.md)。
+按依赖和验收结果推进，不以未验证的时间估算承诺上线。S0 已完成本地验收。S1 的 Kubernetes 控制面和 Observer 抽象已实现，已增加 v0.5.4-alpha 只读 HTTP 适配及契约测试，quorum/数据可用性与 Master 运行版本证明仍缺失；S2 的资源构建、受控执行与监听已通过本地验证，真实部署/读写/恢复验收待完成；S3 及之后尚未完成。参见 [S0 契约](s0.md)、[S1 控制面](s1-control-plane.md) 与 [S2 工作负载](s2-workloads.md)。
 
 | 阶段 | 交付内容 | 验收门槛 | 依赖 |
 | --- | --- | --- | --- |
@@ -13,6 +13,15 @@
 | S6 验证与优化 | Malta 部署后 smoke、升级性能对照、容量与预热建议 | 相同环境和版本证据可追溯；预算和回归阈值明确；建议与执行分离 | S3/S4 + Malta 联调 |
 
 S5 中各服务可以在 S2 后独立开发，但不能绕过对应的数据安全测试。Master 动态成员变更单独立项，待 Raft 外部协议与故障恢复测试成熟后启用；固定副本的生命周期不必等待此功能。
+
+## 读缓存优先路线
+
+首期确定为 **S3/OSS + FUSE**。在原 S1/S2 上增加不可变 readCache 规格、Secret 引用的 SDK mount Job、只读 FUSE DaemonSet、真实节点探针与分层状态；读缓存 Worker 分配使用 Master 启动门槛，不要求上游尚未提供的 quorum 证明。普通模式门槛不变。详见 [读缓存契约](read-cache.md) 与 [验证记录](validation-read-cache.md)。
+
+- 首先完成来源注册、只读边界、冷/热读与故障回源验证，优先保证业务接入可检查。
+- 容量基线为 TTL、Worker 空闲空间与单 reader 并行度；后续补容量压力测试、可量化命中率/延迟、总回源限流和按需预热。
+- 真实 OSS/S3、Kubernetes mount propagation、FUSE/Operator/节点重启恢复仍是发行门槛。
+- S3 扩容必须验证新增 Worker 实际承载读流量；S4 缩容/升级仍需专门状态机。缓存可重建不等于可无协调中断挂载。
 
 ## S0 验收清单
 
@@ -29,10 +38,10 @@ S5 中各服务可以在 S2 后独立开发，但不能绕过对应的数据安�
 
 ## S1 与后续工作包
 
-1. **观察接口：抽象已完成，适配待完成。** 已有只读 `Observer.Observe`、Target/Snapshot、Unknown/Unsupported 和样本有效性契约。下一步固定真实 Curvine 版本并实现适配与契约测试；drain 等写操作不加入当前只读接口。
+1. **观察接口：抽象和发布版部分观测已完成。** 已有只读 `Observer.Observe`、Target/Snapshot、Unknown/Unsupported 和样本有效性契约。已按固定源码实现 [v0.5.4-alpha 契约](contracts/v0.5.4-alpha.md)，下一步补充上游未提供的 quorum/数据可用性证明与真实镜像验收；drain 等写操作不加入当前只读接口。
 2. **API 与控制面：已实现。** Kubernetes metadata/status、DeepCopy、schema、打印列、CEL、namespaced manager、RBAC、leader election 与 status reconcile 已落地。group 仍为早期 `storage.curvine.io/v1alpha1` 契约，尚未做跨版本 API 迁移。
 3. **纯资源构建器：已实现并本地验证。** 用 typed Kubernetes objects 生成 Master/Worker、PVC、Services、ConfigMap 与 PDB；核验 Pod FQDN、Raft IDs、存储挂载和探针。对生成结果做结构性测试，不只做快照文本比较。
-4. **工作负载 reconcile：已实现并本地验证。** 显式运行契约启用资源管理；全量冲突检查、dry-run、每轮至多一次写入、SSA 漂移修复、UID/RV 保护、子资源监听和 PVC Retain 已落地。Worker 创建/扩容受应用健康门控；默认 Observer 未适配时停在等待 quorum。
+4. **工作负载 reconcile：已实现并本地验证。** 显式运行契约启用资源管理；全量冲突检查、dry-run、每轮至多一次写入、SSA 漂移修复、UID/RV 保护、子资源监听和 PVC Retain 已落地。Worker 创建/扩容受应用健康门控；默认 Observer 为 Unsupported；发布版适配器明确报告缺少 quorum 证明，Worker 变更仍被阻断。
 5. **用一套实际镜像打通 E2E。** 验证创建 → 写文件 → 重启 Pod/控制器 → 读回 → 删除 CR → 保留卷。记录镜像 digest、Kubernetes 版本和 StorageClass，完成后再称为可部署 MVP。
 
 ## 验证分层

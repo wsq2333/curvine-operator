@@ -1,6 +1,7 @@
 package plan
 
 import (
+	"bytes"
 	"encoding/json"
 	"os"
 	"reflect"
@@ -143,5 +144,43 @@ func TestPoolOrderDoesNotChangePlanOrMutateInput(t *testing.T) {
 	b, err := Build(c, nil)
 	if err != nil || !reflect.DeepEqual(a, b) {
 		t.Fatalf("nondeterministic plan: %v", err)
+	}
+}
+
+func TestReadCachePurposeAndAllocation(t *testing.T) {
+	data, err := os.ReadFile("../../examples/cluster-read-cache.json")
+	if err != nil {
+		t.Fatal(err)
+	}
+	c, err := api.Decode(bytes.NewReader(data))
+	if err != nil {
+		t.Fatal(err)
+	}
+	p, err := Build(c, nil)
+	if err != nil || p.Executable || len(p.Blockers) != 0 {
+		t.Fatalf("invalid plan: %+v %v", p, err)
+	}
+	seenMount := false
+	for _, s := range p.Steps {
+		if s.Operation == "wait-for-application-raft-quorum" {
+			t.Fatal("cache allocation cannot require unsupported quorum proof")
+		}
+		if s.Operation == "create-persistent-worker-pool" && !reflect.DeepEqual(s.DependsOn, []string{"master-startup"}) {
+			t.Fatal("missing startup gate")
+		}
+		if s.Operation == "register-read-only-origin-and-start-fuse" {
+			seenMount = true
+		}
+	}
+	if !seenMount {
+		t.Fatal("missing cache workflow")
+	}
+	old := c
+	copyPolicy := *c.Spec.ReadCache
+	c.Spec.ReadCache = &copyPolicy
+	c.Spec.ReadCache.TTLSeconds++
+	p, err = Build(c, &old)
+	if err != nil || len(p.Steps) != 0 || len(p.Blockers) != 1 || p.Blockers[0].Reason != "ReadCacheWorkflowRequired" {
+		t.Fatalf("policy mutation leaked: %+v %v", p, err)
 	}
 }

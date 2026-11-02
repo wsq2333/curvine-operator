@@ -59,10 +59,14 @@ type CurvineClusterStatus struct {
 type ObservationStatus struct {
 	SampleTime metav1.Time `json:"sampleTime"`
 	// +kubebuilder:validation:MaxLength=128
-	Version string `json:"version"`
+	// Version is populated only when an adapter can verify the running version.
+	// +optional
+	Version string `json:"version,omitempty"`
 	// +optional
 	// +kubebuilder:validation:Minimum=0
 	RegisteredWorkers *int32 `json:"registeredWorkers,omitempty"`
+	// +optional
+	Application *ApplicationObservation `json:"application,omitempty"`
 }
 
 // Intent isolates Kubernetes metadata and status from the existing S0 model.
@@ -73,4 +77,57 @@ func (c *CurvineCluster) Intent() Cluster {
 		Metadata: Metadata{Name: c.Name, Namespace: c.Namespace},
 		Spec:     *c.Spec.DeepCopy(),
 	}
+}
+
+// ApplicationObservation reports bounded release-specific evidence. Contract
+// and SourceCommit describe the adapter, not the binaries currently running.
+type ApplicationObservation struct {
+	// +kubebuilder:validation:MaxLength=128
+	Contract string `json:"contract"`
+	// +kubebuilder:validation:MaxLength=40
+	SourceCommit string `json:"sourceCommit"`
+	// +kubebuilder:validation:MaxLength=64
+	Reason string `json:"reason"`
+	// +listType=map
+	// +listMapKey=name
+	// +kubebuilder:validation:MaxItems=8
+	Capabilities []CapabilityStatus `json:"capabilities"`
+	// +listType=map
+	// +listMapKey=name
+	// +kubebuilder:validation:MaxItems=5
+	Masters []MasterObservation `json:"masters"`
+	// +optional
+	// +listType=map
+	// +listMapKey=name
+	// +kubebuilder:validation:MaxItems=64
+	WorkerPools []WorkerPoolObservation `json:"workerPools,omitempty"`
+}
+type CapabilityStatus struct {
+	// +kubebuilder:validation:MaxLength=64
+	Name      string `json:"name"`
+	Supported bool   `json:"supported"`
+	// +kubebuilder:validation:MaxLength=64
+	Reason string `json:"reason"`
+}
+type MasterObservation struct {
+	// +kubebuilder:validation:MaxLength=63
+	Name      string `json:"name"`
+	Reachable bool   `json:"reachable"`
+	// +kubebuilder:validation:Enum=Unknown;Active;Standby;SafeMode;Exit
+	Role string `json:"role"`
+}
+type WorkerPoolObservation struct {
+	// +kubebuilder:validation:MaxLength=16
+	Name string `json:"name"`
+	// +kubebuilder:validation:Minimum=0
+	Desired int32 `json:"desired"`
+	// Registered counts matching Live endpoints, not desired replicas.
+	// +kubebuilder:validation:Minimum=0
+	Registered int32 `json:"registered"`
+	// Fresh counts Live endpoints with a recent Master-recorded heartbeat.
+	// +kubebuilder:validation:Minimum=0
+	Fresh int32 `json:"fresh"`
+	// VersionVerified counts structured reports matching the pinned source.
+	// +kubebuilder:validation:Minimum=0
+	VersionVerified int32 `json:"versionVerified"`
 }
