@@ -4,6 +4,26 @@
 
 Curvine Operator aims to manage the lifecycle of Curvine clusters on Kubernetes, with a focus on data safety, reliable operations, and observability.
 
+## Architecture
+
+The Operator uses a common control loop for Curvine clusters. Runtime contracts and capability checks specialize its behavior for different versions, storage layouts and deployment purposes, including read-cache and write-cache clusters. This is the project scope; currently supported operations remain limited by the contracts described below.
+
+```mermaid
+flowchart TB
+  CR["CurvineCluster: desired state and status"] -->|Watch desired state| Controller
+  subgraph Operator["Curvine Operator"]
+    Controller["Controller: reconcile and safety checks"] --> Engine["Workload engine"]
+    Observer["Application Observer"] -->|Observed health| Controller
+  end
+  Controller -->|Update status| CR
+  Engine -->|Reconcile resources| Resources["Kubernetes resources: workloads, storage and configuration"]
+  Resources -->|Resource events| Controller
+  Resources -->|Run| Cluster["Curvine cluster: Masters and Workers"]
+  Cluster -->|Application state| Observer
+```
+
+Kubernetes runs and schedules the workloads. The Operator compares desired state with Kubernetes and application observations, applies supported changes, and reports progress or blockers.
+
 ## Status
 
 The project is an early prototype. Offline planning, a Kubernetes control plane, and opt-in workload reconciliation are implemented. A read-only HTTP Observer for Curvine v0.5.4-alpha is implemented; quorum/data-availability proof and Kubernetes end-to-end deployment validation remain pending. An opt-in S3/OSS read-cache contract with read-only FUSE is implemented; see the scoped validation evidence below.
@@ -27,9 +47,9 @@ Offline plans remain advisory. Workload management requires an explicit runtime 
 - **Integration:** metadata and transfer services, service discovery, and CSI/FUSE.
 - **Optimization:** capacity planning, data preloading, and performance validation.
 
-### Next target: expand an existing read-cache cluster from one Worker to two
+### Next milestone: existing-cluster integration and Worker expansion
 
-**Planned; not yet supported for existing Helm deployments.** Use a second prepared i5e storage node to run an additional Worker against the existing Master, preserving the first Worker and its data. A new Kubernetes node alone does not change the desired Worker count.
+**Planned; not yet supported for existing Helm deployments.** Extend the common control loop to existing Curvine deployments while preserving their identity and data. The first validation scenario is read-cache expansion from one Worker to two on separate prepared storage nodes, keeping the existing Master. This scenario is a milestone toward broader cluster support, not the scope of the Operator. A new Kubernetes node alone does not change the desired Worker count.
 
 Remaining work:
 
@@ -40,37 +60,6 @@ Remaining work:
 - [ ] Verify 1 → 2 expansion with continuous FUSE reads, new-Worker registration and actual I/O, plus convergence after an Operator restart.
 
 Node provisioning and disk preparation are infrastructure prerequisites. This target does not include automatic replica selection, cache rebalancing, scale-in or Master membership changes; write-cache safety gates remain unchanged.
-
-### Target architecture
-
-The diagram shows the planned existing-cluster integration. The reconciliation loop already exists; Helm integration, node placement and local-disk/runtime adapters remain to be implemented.
-
-```mermaid
-flowchart TB
-  Intent["Desired Worker replicas: 2"] --> Operator["Operator: validate and reconcile"]
-  Integration["Explicit Helm handover or worker-only integration"] -.-> Operator
-  Operator --> Workload["Managed Worker workload"]
-  Workload --> Scheduler["Kubernetes scheduler: one Worker per eligible node"]
-  Scheduler --> W0
-  Scheduler --> Guard
-  subgraph NodeA["Existing i5e node"]
-    Master["Existing Master: unchanged"]
-    W0["Existing Worker 0"] --> D0["Existing NVMe data: retained"]
-  end
-  subgraph NodeB["Additional prepared i5e node"]
-    Guard["Validate local disk mounts"] --> W1["New Worker 1"]
-    W1 --> D1["Prepared NVMe disks"]
-  end
-  W0 -->|Registration and heartbeat| Master
-  W1 -->|Registration and heartbeat| Master
-  Master --> Observer["Observer: identity, heartbeat and version"]
-  Observer --> Status["Pool status and diagnostics"]
-  Status -.-> Operator
-  Acceptance["FUSE acceptance: continuous reads and new-Worker I/O"] -.-> W0
-  Acceptance -.-> W1
-```
-
-Registration is a control-plane milestone; actual data serving is verified separately by the acceptance test.
 
 ## Documentation
 

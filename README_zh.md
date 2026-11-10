@@ -4,6 +4,26 @@
 
 Curvine Operator 致力于管理 Kubernetes 上 Curvine 集群的完整生命周期，重点关注数据安全、可靠运维和可观测性。
 
+## 核心架构
+
+Operator 使用统一的控制循环管理 Curvine 集群，通过运行契约和能力检查适配不同版本、存储布局及部署用途，包括读缓存和写缓存集群。这是项目的目标范围；当前可执行的操作仍受下文所述契约约束。
+
+```mermaid
+flowchart TB
+  CR["CurvineCluster：期望状态与运行状态"] -->|监听期望状态| Controller
+  subgraph Operator["Curvine Operator"]
+    Controller["Controller：持续收敛与安全检查"] --> Engine["工作负载引擎"]
+    Observer["应用 Observer"] -->|观测健康状态| Controller
+  end
+  Controller -->|更新状态| CR
+  Engine -->|收敛资源| Resources["Kubernetes 资源：工作负载、存储与配置"]
+  Resources -->|资源事件| Controller
+  Resources -->|运行| Cluster["Curvine 集群：Master 与 Worker"]
+  Cluster -->|应用状态| Observer
+```
+
+Kubernetes 负责运行和调度工作负载。Operator 对比期望状态与 Kubernetes、应用层观测，执行受支持的变更，并报告进度或阻塞原因。
+
 ## 当前状态
 
 项目处于早期原型阶段，已实现离线规划、Kubernetes 控制面及可显式启用的工作负载收敛。已实现 Curvine v0.5.4-alpha 的只读 HTTP Observer；quorum/数据可用性证明和Kubernetes 端到端部署验收仍待完成。新增可显式启用的 S3/OSS + 只读 FUSE 缓存契约，验证范围见下方记录。
@@ -27,9 +47,9 @@ Curvine Operator 致力于管理 Kubernetes 上 Curvine 集群的完整生命周
 - **服务集成：** 元数据与传输服务、服务发现和 CSI/FUSE。
 - **运行优化：** 容量规划、数据预热与性能验证。
 
-### 下一目标：现有读缓存集群从一个 Worker 扩到两个
+### 下一里程碑：现有集群接入与 Worker 扩容
 
-**规划中；尚不支持直接扩容现有 Helm 部署。** 使用第二台已准备好的 i5e 存储节点运行新增 Worker，连接现有 Master，保留第一个 Worker 及其数据。新增 Kubernetes 节点本身不会改变 Worker 的期望副本数。
+**规划中；尚不支持直接扩容现有 Helm 部署。** 将统一控制循环扩展到现有 Curvine 部署，保留集群身份与数据。首个验收场景是在不同的已准备存储节点上将读缓存 Worker 从一个扩到两个，保持现有 Master 不变。该场景是面向更广泛集群支持的阶段性里程碑，不限定 Operator 的目标范围。新增 Kubernetes 节点本身不会改变 Worker 的期望副本数。
 
 待完成工作：
 
@@ -40,37 +60,6 @@ Curvine Operator 致力于管理 Kubernetes 上 Curvine 集群的完整生命周
 - [ ] 验收 1 → 2 扩容期间的持续 FUSE 读取、新 Worker 注册及实际 I/O，以及 Operator 重启后的持续收敛。
 
 节点供应和磁盘准备属于基础设施前提。本目标不包含自动决定副本数、缓存重平衡、缩容或 Master 成员变更；写缓存安全门槛保持不变。
-
-### 目标架构
-
-下图表示规划中的现有集群接入。已有 reconciliation 循环可复用；Helm 接入、节点放置及本地磁盘/运行契约适配仍待实现。
-
-```mermaid
-flowchart TB
-  Intent["Worker 期望副本数：2"] --> Operator["Operator：校验与持续收敛"]
-  Integration["明确的 Helm 交接或仅管理 Worker 模式"] -.-> Operator
-  Operator --> Workload["受管 Worker 工作负载"]
-  Workload --> Scheduler["Kubernetes 调度器：每个合格节点一个 Worker"]
-  Scheduler --> W0
-  Scheduler --> Guard
-  subgraph NodeA["现有 i5e 节点"]
-    Master["现有 Master：保持不变"]
-    W0["现有 Worker 0"] --> D0["已有 NVMe 数据：保留"]
-  end
-  subgraph NodeB["新增且已准备好的 i5e 节点"]
-    Guard["校验本地磁盘挂载"] --> W1["新增 Worker 1"]
-    W1 --> D1["已准备好的 NVMe 磁盘"]
-  end
-  W0 -->|注册与心跳| Master
-  W1 -->|注册与心跳| Master
-  Master --> Observer["Observer：身份、心跳与版本"]
-  Observer --> Status["Pool 状态与诊断"]
-  Status -.-> Operator
-  Acceptance["FUSE 验收：持续读取与新 Worker 实际 I/O"] -.-> W0
-  Acceptance -.-> W1
-```
-
-注册成功属于控制面里程碑；实际数据服务能力由独立验收验证。
 
 ## 文档
 
