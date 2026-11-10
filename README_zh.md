@@ -27,6 +27,51 @@ Curvine Operator 致力于管理 Kubernetes 上 Curvine 集群的完整生命周
 - **服务集成：** 元数据与传输服务、服务发现和 CSI/FUSE。
 - **运行优化：** 容量规划、数据预热与性能验证。
 
+### 下一目标：现有读缓存集群从一个 Worker 扩到两个
+
+**规划中；尚不支持直接扩容现有 Helm 部署。** 使用第二台已准备好的 i5e 存储节点运行新增 Worker，连接现有 Master，保留第一个 Worker 及其数据。新增 Kubernetes 节点本身不会改变 Worker 的期望副本数。
+
+待完成工作：
+
+- [ ] 明确 Helm 交接或仅管理 Worker 的接入模式，为受管字段指定唯一管理者，并引用现有 Master。
+- [ ] 增加 Worker 节点池选择、强制反亲和、容忍及资源请求，确保两个 Worker 分布在不同的合格节点。
+- [ ] 支持本地多块 NVMe、挂载与设备校验、磁盘就绪诊断；保留已有数据，不自动格式化磁盘。
+- [ ] 适配主机网络、端口、配置路径和 Worker 注册身份，验证运行版本来源与应用兼容性。
+- [ ] 验收 1 → 2 扩容期间的持续 FUSE 读取、新 Worker 注册及实际 I/O，以及 Operator 重启后的持续收敛。
+
+节点供应和磁盘准备属于基础设施前提。本目标不包含自动决定副本数、缓存重平衡、缩容或 Master 成员变更；写缓存安全门槛保持不变。
+
+### 目标架构
+
+下图表示规划中的现有集群接入。已有 reconciliation 循环可复用；Helm 接入、节点放置及本地磁盘/运行契约适配仍待实现。
+
+```mermaid
+flowchart TB
+  Intent["Worker 期望副本数：2"] --> Operator["Operator：校验与持续收敛"]
+  Integration["明确的 Helm 交接或仅管理 Worker 模式"] -.-> Operator
+  Operator --> Workload["受管 Worker 工作负载"]
+  Workload --> Scheduler["Kubernetes 调度器：每个合格节点一个 Worker"]
+  Scheduler --> W0
+  Scheduler --> Guard
+  subgraph NodeA["现有 i5e 节点"]
+    Master["现有 Master：保持不变"]
+    W0["现有 Worker 0"] --> D0["已有 NVMe 数据：保留"]
+  end
+  subgraph NodeB["新增且已准备好的 i5e 节点"]
+    Guard["校验本地磁盘挂载"] --> W1["新增 Worker 1"]
+    W1 --> D1["已准备好的 NVMe 磁盘"]
+  end
+  W0 -->|注册与心跳| Master
+  W1 -->|注册与心跳| Master
+  Master --> Observer["Observer：身份、心跳与版本"]
+  Observer --> Status["Pool 状态与诊断"]
+  Status -.-> Operator
+  Acceptance["FUSE 验收：持续读取与新 Worker 实际 I/O"] -.-> W0
+  Acceptance -.-> W1
+```
+
+注册成功属于控制面里程碑；实际数据服务能力由独立验收验证。
+
 ## 文档
 
 - [S3/OSS 读缓存与 FUSE 契约](docs/read-cache.md)
