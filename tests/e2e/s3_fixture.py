@@ -5,7 +5,7 @@ minimal; production IAM and OSS behavior require a separate environment test.
 """
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from urllib.parse import urlsplit, parse_qs
-import json, threading, hashlib
+import json, threading, hashlib, re
 DATA=b'curvine-read-cache-probe\n'
 lock=threading.Lock()
 state={'gets':0,'bytes':0,'writes':0,'fail':False,'changed':False}
@@ -49,7 +49,7 @@ class Handler(BaseHTTPRequestHandler):
             self.send_response(200);self.send_header('Content-Type','application/xml');self.send_header('Content-Length',str(len(body)));self.end_headers()
             if not head:self.wfile.write(body)
             return
-        if url.path!='/example-datasets/immutable-v1/probe.txt':
+        if url.path!='/example-datasets/immutable-v1/probe.txt' and not re.fullmatch(r'/example-datasets/immutable-v1/scale-[0-9]+\.txt',url.path):
             self.send_response(404);self.end_headers();return
         content=DATA if not changed else b'Curvine-read-cache-probe\n'
         start,end=0,len(content)-1;code=200

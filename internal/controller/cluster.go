@@ -8,6 +8,7 @@ import (
 
 	api "github.com/wsq2333/curvine-operator/api/v1alpha1"
 	"github.com/wsq2333/curvine-operator/internal/cacheobserve"
+	"github.com/wsq2333/curvine-operator/internal/expansion"
 	"github.com/wsq2333/curvine-operator/internal/observe"
 	"github.com/wsq2333/curvine-operator/internal/workload"
 	appsv1 "k8s.io/api/apps/v1"
@@ -174,13 +175,74 @@ func (r *ClusterReconciler) Reconcile(ctx context.Context, req ctrl.Request) (ct
 		reason = "InvalidObservation"
 		message = "Application sample expired during read-cache probing"
 	}
+	var progress []api.WorkerPoolProgress
+	if valid && r.WorkloadContract != "" {
+		inventoryCtx, cancel := context.WithTimeout(ctx, 5*time.Second)
+		progress = expansion.Collect(inventoryCtx, reader, &latest, snapshot, resources, now())
+		cancel()
+		if snapshot != nil && snapshot.Validate(target, now(), positive(r.MaxObservationAge, 90*time.Second)) != nil {
+			snapshot = nil
+			reason = "InvalidObservation"
+			message = "Application sample expired during allocation diagnostics"
+			for i := range progress {
+				progress[i].Registered = nil
+				if progress[i].Phase == "Registered" {
+					progress[i].Phase = "WaitingForRegistration"
+					progress[i].Reason = "ApplicationEvidenceUnavailable"
+				}
+			}
+		}
+		var current api.CurvineCluster
+		if err := reader.Get(ctx, req.NamespacedName, &current); err != nil {
+			return ctrl.Result{}, client.IgnoreNotFound(err)
+		}
+		if current.UID != latest.UID || current.Generation != latest.Generation || !current.DeletionTimestamp.IsZero() {
+			return ctrl.Result{RequeueAfter: time.Second}, nil
+		}
+		latest = current
+	}
 	base := latest.DeepCopy()
+	latest.Status.WorkerPools = progress
+	latest.Status.AllocationSampleTime = nil
+	if len(progress) > 0 {
+		stamp := metav1.NewTime(now())
+		latest.Status.AllocationSampleTime = &stamp
+	}
 	latest.Status.ObservedGeneration = latest.Generation
 	set := func(typ string, status metav1.ConditionStatus, why, detail string) {
 		meta.SetStatusCondition(&latest.Status.Conditions, metav1.Condition{
 			Type: typ, Status: status, Reason: why, Message: detail,
 			ObservedGeneration: latest.Generation, LastTransitionTime: metav1.NewTime(now()),
 		})
+	}
+	if len(progress) > 0 {
+		status := metav1.ConditionTrue
+		why := "AllWorkersRegistered"
+		for _, p := range progress {
+			if p.Phase != "Registered" {
+				status = metav1.ConditionFalse
+				if p.Phase == "Unknown" {
+					status = metav1.ConditionUnknown
+				}
+				why = p.Reason
+				break
+			}
+		}
+		set("WorkerPoolsReady", status, why, "Allocation and fresh registration only; per-worker data placement requires a separate acceptance run")
+		stalled := metav1.ConditionFalse
+		for _, p := range progress {
+			if p.Stalled {
+				stalled = metav1.ConditionTrue
+			}
+		}
+		stallReason, stallMessage := "ProgressObserved", "Allocation progress is within the ten-minute deadline or registration is complete"
+		if stalled == metav1.ConditionTrue {
+			stallReason, stallMessage = "ProgressDeadline", "No allocation or registration progress for ten minutes; reconciliation continues without rollback"
+		}
+		set("ExpansionStalled", stalled, stallReason, stallMessage)
+	} else {
+		set("WorkerPoolsReady", metav1.ConditionUnknown, "InventoryUnavailable", "Workload diagnostics are unavailable")
+		set("ExpansionStalled", metav1.ConditionUnknown, "InventoryUnavailable", "Workload diagnostics are unavailable")
 	}
 	if valid {
 		set(SpecValid, metav1.ConditionTrue, "Validated", "The intent satisfies the supported specification contract")

@@ -14,6 +14,7 @@ import (
 	"github.com/wsq2333/curvine-operator/internal/controller"
 	"github.com/wsq2333/curvine-operator/internal/curvine/v054"
 	"github.com/wsq2333/curvine-operator/internal/observe"
+	"github.com/wsq2333/curvine-operator/internal/telemetry"
 	"github.com/wsq2333/curvine-operator/internal/workload"
 	appsv1 "k8s.io/api/apps/v1"
 	batchv1 "k8s.io/api/batch/v1"
@@ -25,6 +26,7 @@ import (
 	"sigs.k8s.io/controller-runtime/pkg/cache"
 	"sigs.k8s.io/controller-runtime/pkg/healthz"
 	"sigs.k8s.io/controller-runtime/pkg/log/zap"
+	runtimemetrics "sigs.k8s.io/controller-runtime/pkg/metrics"
 	metricsserver "sigs.k8s.io/controller-runtime/pkg/metrics/server"
 )
 
@@ -45,6 +47,7 @@ func run() error {
 	contract := flag.String("workload-contract", "", "opt in to workload management using "+workload.Contract+" or "+v054.Contract+"; empty observes only")
 	observerContract := flag.String("observer-contract", "", "application observer contract; the v0.5.4-alpha workload contract selects its observer automatically")
 	maxAge := flag.Duration("max-observation-age", 90*time.Second, "maximum accepted sample age")
+	existingExpansion := flag.Bool("enable-existing-expansion", false, "opt in to retained worker-only expansion of pinned existing read-cache deployments")
 	opts := zap.Options{Development: false}
 	opts.BindFlags(flag.CommandLine)
 	flag.Parse()
@@ -91,6 +94,7 @@ func run() error {
 	if err != nil {
 		return err
 	}
+	runtimemetrics.Registry.MustRegister(&telemetry.Collector{Reader: mgr.GetClient(), MaxAge: *maxAge})
 	reconciler := &controller.ClusterReconciler{
 		Client: mgr.GetClient(), APIReader: mgr.GetAPIReader(), Observer: observer,
 		WorkloadContract: *contract,
@@ -98,6 +102,12 @@ func run() error {
 	}
 	if err := reconciler.SetupWithManager(mgr); err != nil {
 		return err
+	}
+	if *existingExpansion {
+		expansion := &controller.WorkerExpansionReconciler{Client: mgr.GetClient(), APIReader: mgr.GetAPIReader(), Observer: v054.New(nil), PollInterval: *poll}
+		if err := expansion.SetupWithManager(mgr); err != nil {
+			return err
+		}
 	}
 	if err := mgr.AddHealthzCheck("healthz", healthz.Ping); err != nil {
 		return err

@@ -1,0 +1,14 @@
+apiVersion: kustomize.config.k8s.io/v1beta1
+kind: Kustomization
+# Render into the existing cluster's namespace with a deployment overlay.
+resources:
+  - ../default
+  - node-reader.yaml
+patches:
+  - target:
+      kind: Deployment
+      name: curvine-operator
+    patch: |-
+      - op: add
+        path: /spec/template/spec/containers/0/args/-
+        value: --enable-existing-expansion=true

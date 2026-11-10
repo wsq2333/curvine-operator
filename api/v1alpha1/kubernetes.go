@@ -9,7 +9,7 @@ import (
 var GroupVersion = schema.GroupVersion{Group: "storage.curvine.io", Version: "v1alpha1"}
 
 var SchemeBuilder = runtime.NewSchemeBuilder(func(scheme *runtime.Scheme) error {
-	scheme.AddKnownTypes(GroupVersion, &CurvineCluster{}, &CurvineClusterList{})
+	scheme.AddKnownTypes(GroupVersion, &CurvineCluster{}, &CurvineClusterList{}, &CurvineWorkerExpansion{}, &CurvineWorkerExpansionList{})
 	metav1.AddToGroupVersion(scheme, GroupVersion)
 	return nil
 })
@@ -41,6 +41,14 @@ type CurvineClusterList struct {
 }
 
 type CurvineClusterStatus struct {
+	// +optional
+	AllocationSampleTime *metav1.Time `json:"allocationSampleTime,omitempty"`
+	// WorkerPools reports current allocation/registration, not per-worker I/O proof.
+	// +optional
+	// +listType=map
+	// +listMapKey=name
+	// +kubebuilder:validation:MaxItems=64
+	WorkerPools []WorkerPoolProgress `json:"workerPools,omitempty"`
 	// ObservedGeneration is processed intent, not proof of successful execution.
 	// +optional
 	ObservedGeneration int64 `json:"observedGeneration,omitempty"`

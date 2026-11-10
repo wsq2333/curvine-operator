@@ -1,0 +1,24 @@
+groups:
+  - name: curvine-read-cache
+    rules:
+      - record: curvine:worker_capacity_unavailable_ratio
+        expr: 1 - available{job="curvine-worker"} / clamp_min(capacity{job="curvine-worker"}, 1)
+      - record: curvine:worker_cache_used_bytes
+        expr: fs_used{job="curvine-worker"}
+      - record: curvine:worker_read_bytes_per_second
+        expr: sum by(namespace, cluster, pool, pod) (rate({job="curvine-worker",__name__=~"read_bytes(_total)?"}[5m]))
+      - record: curvine:worker_write_bytes_per_second
+        expr: sum by(namespace, cluster, pool, pod) (rate({job="curvine-worker",__name__=~"write_bytes(_total)?"}[5m]))
+      - record: curvine:fuse_cache_read_bytes_per_second
+        expr: sum by(namespace, cluster, pod) (rate({job="curvine-fuse",__name__=~"client_read_bytes(_total)?"}[5m]))
+      # Lower bound only: fallback-capable handles may read cache OR origin.
+      - record: curvine:fuse_direct_ufs_read_bytes_per_second
+        expr: sum by(namespace, cluster, pod) (rate(curvine_fuse_io_bytes_total{job="curvine-fuse",io_type="read",path_type="ufs",status="success"}[5m]))
+      - record: curvine:fuse_read_latency_p95_seconds
+        expr: histogram_quantile(0.95, sum by(namespace, cluster, pod, le) (rate(curvine_fuse_io_duration_us_bucket{job="curvine-fuse",io_type="read",status="success"}[5m]))) / 1000000
+      - alert: CurvineExpansionStalled
+        expr: curvine_operator_worker_pool_stalled == 1
+        for: 2m
+        labels: {severity: warning}
+        annotations:
+          summary: "Curvine Worker pool has made no progress for ten minutes"

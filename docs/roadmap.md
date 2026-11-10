@@ -1,6 +1,6 @@
 # 实施路线与验收门槛
 
-按依赖和验收结果推进，不以未验证的时间估算承诺上线。S0 已完成本地验收。S1 的 Kubernetes 控制面和 Observer 抽象已实现，已增加 v0.5.4-alpha 只读 HTTP 适配及契约测试，quorum/数据可用性与 Master 运行版本证明仍缺失；S2 的资源构建、受控执行与监听已通过本地验证，真实部署/读写/恢复验收待完成；S3 及之后尚未完成。参见 [S0 契约](s0.md)、[S1 控制面](s1-control-plane.md) 与 [S2 工作负载](s2-workloads.md)。
+按依赖和验收结果推进，不以未验证的时间估算承诺上线。S0 已完成本地验收。S1 的 Kubernetes 控制面和 Observer 抽象已实现，已增加 v0.5.4-alpha 只读 HTTP 适配及契约测试，quorum/数据可用性与 Master 运行版本证明仍缺失；S2 的资源构建、受控执行与监听已通过本地验证，读缓存的 Kubernetes 部署/读取/扩容及 Operator 重启已有专项验收，完整恢复验收仍待完成；S3 已实现扩容诊断、指标和读缓存扩容验收工具，尚未完成配置修订/暂停恢复等完整运维能力；S4 及之后尚未完成。参见 [S0 契约](s0.md)、[S1 控制面](s1-control-plane.md) 与 [S2 工作负载](s2-workloads.md)。
 
 | 阶段 | 交付内容 | 验收门槛 | 依赖 |
 | --- | --- | --- | --- |
@@ -20,8 +20,12 @@ S5 中各服务可以在 S2 后独立开发，但不能绕过对应的数据安�
 
 - 首先完成来源注册、只读边界、冷/热读与故障回源验证，优先保证业务接入可检查。
 - 容量基线为 TTL、Worker 空闲空间与单 reader 并行度；后续补容量压力测试、可量化命中率/延迟、总回源限流和按需预热。
-- 真实 OSS/S3、Kubernetes mount propagation、FUSE/Operator/节点重启恢复仍是发行门槛。
+- Kubernetes mount propagation、业务容器读取、Worker 1→3 扩容及 Operator 重启见 [专项验证](validation-expansion.md)。真实 OSS/S3、FUSE/节点重启恢复仍是发行门槛。
 - S3 扩容必须验证新增 Worker 实际承载读流量；S4 缩容/升级仍需专门状态机。缓存可重建不等于可无协调中断挂载。
+
+### 现有读缓存集群接入
+
+已实现独立 `CurvineWorkerExpansion` 的 worker-only 路径：固定源对象/配置/镜像/目标节点身份，保留 Helm 所有权，创建独立 Worker 与不可变配置快照；增加 NVMe/磁盘归属检查、并发扩容预约、导入运行契约及离线计划/显式验收工具。详见 [接入契约](existing-worker-expansion.md)。首期仅支持单 Master、单现有 Worker 的 1→2 扩容，尚未在 sample dev 执行；跨节点 FUSE/I/O 与现场恢复验收仍未完成，不把本地 UT/envtest 当作部署成功。
 
 ## S0 验收清单
 

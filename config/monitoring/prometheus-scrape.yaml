@@ -1,0 +1,36 @@
+# Merge into an existing Prometheus configuration. The scraper needs namespace-
+# scoped get/list/watch Pods; this file does not grant cluster-wide permissions.
+scrape_configs:
+  - job_name: curvine-operator
+    static_configs:
+      - targets: [curvine-operator-metrics.curvine-system.svc:8080]
+  - job_name: curvine-worker
+    kubernetes_sd_configs:
+      - role: pod
+        namespaces: {names: [curvine-system]}
+    relabel_configs:
+      - source_labels: [__meta_kubernetes_pod_label_storage_curvine_io_role, __meta_kubernetes_pod_container_port_name]
+        regex: worker;web
+        action: keep
+      - source_labels: [__meta_kubernetes_namespace]
+        target_label: namespace
+      - source_labels: [__meta_kubernetes_pod_name]
+        target_label: pod
+      - source_labels: [__meta_kubernetes_pod_label_storage_curvine_io_cluster]
+        target_label: cluster
+      - source_labels: [__meta_kubernetes_pod_label_storage_curvine_io_pool]
+        target_label: pool
+  - job_name: curvine-fuse
+    kubernetes_sd_configs:
+      - role: pod
+        namespaces: {names: [curvine-system]}
+    relabel_configs:
+      - source_labels: [__meta_kubernetes_pod_label_storage_curvine_io_role, __meta_kubernetes_pod_container_port_name]
+        regex: fuse;metrics
+        action: keep
+      - source_labels: [__meta_kubernetes_namespace]
+        target_label: namespace
+      - source_labels: [__meta_kubernetes_pod_name]
+        target_label: pod
+      - source_labels: [__meta_kubernetes_pod_label_storage_curvine_io_cluster]
+        target_label: cluster

@@ -247,6 +247,9 @@ spec:
               rule: '!has(self.readCache) || self.readCache == oldSelf.readCache'
           status:
             properties:
+              allocationSampleTime:
+                format: date-time
+                type: string
               conditions:
                 items:
                   description: Condition contains details for one aspect of the current
@@ -442,6 +445,81 @@ spec:
                   successful execution.
                 format: int64
                 type: integer
+              workerPools:
+                description: WorkerPools reports current allocation/registration,
+                  not per-worker I/O proof.
+                items:
+                  description: |-
+                    WorkerPoolProgress describes current allocation/registration, not data placement.
+                    Progress survives manager restarts through the status subresource.
+                  properties:
+                    created:
+                      format: int32
+                      type: integer
+                    desired:
+                      format: int32
+                      type: integer
+                    lastProgressTime:
+                      format: date-time
+                      type: string
+                    name:
+                      maxLength: 16
+                      type: string
+                    observedGeneration:
+                      format: int64
+                      type: integer
+                    phase:
+                      enum:
+                      - Unknown
+                      - Blocked
+                      - WaitingForResources
+                      - WaitingForVolumes
+                      - WaitingForScheduling
+                      - WaitingForPods
+                      - WaitingForRegistration
+                      - Registered
+                      type: string
+                    ready:
+                      format: int32
+                      type: integer
+                    reason:
+                      maxLength: 64
+                      type: string
+                    registered:
+                      description: Nil means unavailable, never zero registered workers.
+                      format: int32
+                      type: integer
+                    resource:
+                      description: First affected resource; raw Kubernetes events/errors
+                        are never copied.
+                      maxLength: 253
+                      type: string
+                    scheduled:
+                      format: int32
+                      type: integer
+                    stalled:
+                      type: boolean
+                    volumesBound:
+                      format: int32
+                      type: integer
+                  required:
+                  - created
+                  - desired
+                  - lastProgressTime
+                  - name
+                  - observedGeneration
+                  - phase
+                  - ready
+                  - reason
+                  - scheduled
+                  - stalled
+                  - volumesBound
+                  type: object
+                maxItems: 64
+                type: array
+                x-kubernetes-list-map-keys:
+                - name
+                x-kubernetes-list-type: map
             type: object
         required:
         - spec

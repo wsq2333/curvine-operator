@@ -1,0 +1,9 @@
+# Local acceptance only, not a production image. Build context must contain the
+# pinned upstream server/FUSE/SDK binaries, Linux manager/cache-node, and fixture.
+FROM curvine-readcache-toolchain:local
+COPY curvine-server curvine-fuse curvine-cache-mount curvine-cache-node /app/curvine/lib/
+COPY manager /manager
+COPY s3_fixture.py /s3_fixture.py
+RUN mkdir -p /var/log/curvine /var/lib/curvine /var/lib/curvine-state \
+    && chown -R 1000:1000 /var/log/curvine /var/lib/curvine /var/lib/curvine-state
+USER 1000:1000

@@ -1,0 +1,81 @@
+{
+  "runs": [
+    {
+      "clusterUID": "fffc2fac-9fe6-4a1d-988e-b635b9d35ea4",
+      "pool": "ssd",
+      "from": 1,
+      "to": 3,
+      "passed": true,
+      "readRounds": 35,
+      "readFailures": 0,
+      "phases": [
+        {
+          "phase": "WaitingForScheduling",
+          "reason": "PodUnscheduled"
+        },
+        {
+          "phase": "WaitingForPods",
+          "reason": "PodNotReady"
+        },
+        {
+          "phase": "Registered",
+          "reason": "WorkerRegistrationVerified"
+        }
+      ],
+      "newWorkers": {
+        "1": {
+          "read_bytes": 750.0,
+          "write_bytes": 750.0
+        },
+        "2": {
+          "read_bytes": 950.0,
+          "write_bytes": 950.0
+        }
+      },
+      "generation": 2,
+      "finishedAt": "2026-11-04T04:10:36.348294+00:00"
+    },
+    {
+      "clusterUID": "fffc2fac-9fe6-4a1d-988e-b635b9d35ea4",
+      "pool": "ssd",
+      "from": 3,
+      "to": 4,
+      "passed": true,
+      "readRounds": 22,
+      "readFailures": 0,
+      "phases": [
+        {
+          "phase": "WaitingForScheduling",
+          "reason": "PodUnscheduled"
+        },
+        {
+          "phase": "Registered",
+          "reason": "WorkerRegistrationVerified"
+        }
+      ],
+      "newWorkers": {
+        "3": {
+          "read_bytes": 575.0,
+          "write_bytes": 575.0
+        }
+      },
+      "generation": 3,
+      "operatorRolloutComplete": true,
+      "finishedAt": "2026-11-04T04:13:04.736732+00:00"
+    }
+  ],
+  "environment": {
+    "kind": "v0.31.0",
+    "kubernetes": "v1.35.0",
+    "architecture": "linux/arm64",
+    "nodes": 1,
+    "masters": 1,
+    "storageClass": "standard (kind local-path)",
+    "upstreamCommit": "89df141912e96d127421de6e4d36e6e2190d9949",
+    "runtimeImage": "docker.io/library/curvine-expansion-e2e@sha256:b68ea44e7f5a33f3a2bb41a2a7480a1c91cf6ea5e589c9b19d93d950cc3eb6bb",
+    "operatorImageID": "sha256:4fb5995dcf7c2dc70c27777e1e1bee3d44a8e90d3d913f29e2d48d53a6909b12",
+    "origin": "read-only repository S3 fixture, not cloud S3/OSS",
+    "objectsPerRun": 96,
+    "objectSizeBytes": 25
+  }
+}
